@@ -1,13 +1,38 @@
 from pathlib import Path
 
 import isaaclab.sim as sim_utils
+import isaaclab.terrains as terrain_gen
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
 from isaaclab.envs import DirectRLEnvCfg, ViewerCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg
-from isaaclab.terrains import TerrainImporterCfg
+from isaaclab.terrains import TerrainGeneratorCfg, TerrainImporterCfg
 from isaaclab.utils import configclass
+
+
+ROUGH_TERRAIN_CFG = TerrainGeneratorCfg(
+    # Each sub-terrain is 8x8 m. With 3x3 cells we cover 24x24 m, plenty of room
+    # for 128 envs at env_spacing=4 to fit on the heightfield.
+    size=(8.0, 8.0),
+    border_width=10.0,
+    num_rows=3,
+    num_cols=3,
+    horizontal_scale=0.1,
+    vertical_scale=0.005,
+    slope_threshold=0.75,
+    use_cache=False,
+    sub_terrains={
+        # Gentle bumpy ground: 1-4 cm random height variation. Bump amplitude up
+        # for harder terrains; this is a good first-pass for a fresh policy.
+        "random_rough": terrain_gen.HfRandomUniformTerrainCfg(
+            proportion=1.0,
+            noise_range=(0.01, 0.04),
+            noise_step=0.005,
+            border_width=0.25,
+        ),
+    },
+)
 
 
 ASSET_DIR = Path(__file__).resolve().parents[3] / "assets" / "robots" / "mos2026_2_closed_usd" / "usd"
@@ -47,7 +72,9 @@ class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
 
     terrain = TerrainImporterCfg(
         prim_path="/World/ground",
-        terrain_type="plane",
+        terrain_type="generator",
+        terrain_generator=ROUGH_TERRAIN_CFG,
+        max_init_terrain_level=None,
         collision_group=-1,
         visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.28, 0.30, 0.32)),
         physics_material=sim_utils.RigidBodyMaterialCfg(
