@@ -6,7 +6,7 @@ from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
 from isaaclab.envs import DirectRLEnvCfg, ViewerCfg
 from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.sim import SimulationCfg
+from isaaclab.sim import PhysxCfg, SimulationCfg
 from isaaclab.terrains import TerrainGeneratorCfg, TerrainImporterCfg
 from isaaclab.utils import configclass
 
@@ -67,6 +67,15 @@ class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
             static_friction=1.0,
             dynamic_friction=1.0,
             restitution=0.0,
+        ),
+        # Rough heightfield terrain + closed-chain articulation produce many
+        # more broad-phase pairs than the PhysX defaults expect. Bump the GPU
+        # buffers to avoid "needs to increase ... PairsCapacity to ..." errors
+        # at scene cook time.
+        physx=PhysxCfg(
+            gpu_found_lost_pairs_capacity=2**23,
+            gpu_found_lost_aggregate_pairs_capacity=2**28,
+            gpu_total_aggregate_pairs_capacity=2**23,
         ),
     )
 
