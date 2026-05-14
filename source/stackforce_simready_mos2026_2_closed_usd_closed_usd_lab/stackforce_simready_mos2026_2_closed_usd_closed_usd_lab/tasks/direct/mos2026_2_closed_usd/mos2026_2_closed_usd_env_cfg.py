@@ -35,6 +35,59 @@ ROUGH_TERRAIN_CFG = TerrainGeneratorCfg(
 )
 
 
+# Curriculum terrain: rows = difficulty levels (level 0 is easiest).
+# `curriculum=True` makes the sub-terrains generate from difficulty 0..1
+# along the rows, so every env starts on the flattest variant. The env's
+# `_reset_idx` promotes/demotes envs between rows based on how far the
+# policy walks per episode.
+CURRICULUM_TERRAIN_CFG = TerrainGeneratorCfg(
+    size=(8.0, 8.0),
+    border_width=10.0,
+    num_rows=6,
+    num_cols=5,
+    horizontal_scale=0.1,
+    vertical_scale=0.005,
+    slope_threshold=0.75,
+    use_cache=False,
+    curriculum=True,
+    difficulty_range=(0.0, 1.0),
+    sub_terrains={
+        # Pure flat — independent of difficulty.
+        "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=0.2),
+        # Bumpy ground: noise scales 0 → 8 cm with difficulty.
+        "rough": terrain_gen.HfRandomUniformTerrainCfg(
+            proportion=0.2,
+            noise_range=(0.0, 0.08),
+            noise_step=0.005,
+            border_width=0.25,
+        ),
+        # Stairs up: step height scales 0 → 12 cm.
+        "stairs_up": terrain_gen.MeshPyramidStairsTerrainCfg(
+            proportion=0.2,
+            step_height_range=(0.0, 0.12),
+            step_width=0.32,
+            platform_width=2.0,
+            border_width=1.0,
+        ),
+        # Stairs down: same scaling but inverted.
+        "stairs_down": terrain_gen.MeshInvertedPyramidStairsTerrainCfg(
+            proportion=0.2,
+            step_height_range=(0.0, 0.12),
+            step_width=0.32,
+            platform_width=2.0,
+            border_width=1.0,
+        ),
+        # Discrete grid obstacles: cell height scales 0 → 6 cm.
+        "random_grid": terrain_gen.MeshRandomGridTerrainCfg(
+            proportion=0.2,
+            grid_width=0.45,
+            grid_height_range=(0.0, 0.06),
+            platform_width=2.0,
+        ),
+    },
+)
+
+
 ASSET_DIR = Path(__file__).resolve().parents[3] / "assets" / "robots" / "mos2026_2_closed_usd" / "usd"
 USD_PATH = ASSET_DIR / "mos2026_2.usd"
 
@@ -70,19 +123,20 @@ class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
         ),
         # Rough heightfield terrain + closed-chain articulation produce many
         # more broad-phase pairs than the PhysX defaults expect. Bump the GPU
-        # buffers to avoid "needs to increase ... PairsCapacity to ..." errors
-        # at scene cook time.
+        # buffers above defaults, but keep them small enough to fit on an
+        # 11 GB consumer GPU (2**28 aggregate pairs would try to allocate ~2 GB).
         physx=PhysxCfg(
-            gpu_found_lost_pairs_capacity=2**23,
-            gpu_found_lost_aggregate_pairs_capacity=2**28,
-            gpu_total_aggregate_pairs_capacity=2**23,
+            gpu_found_lost_pairs_capacity=2**22,
+            gpu_found_lost_aggregate_pairs_capacity=2**26,
+            gpu_total_aggregate_pairs_capacity=2**22,
         ),
     )
 
+    # Default to a flat plane. Use `--terrain rough` on the train/play scripts
+    # to switch to ROUGH_TERRAIN_CFG (or override `terrain` here in code).
     terrain = TerrainImporterCfg(
         prim_path="/World/ground",
-        terrain_type="generator",
-        terrain_generator=ROUGH_TERRAIN_CFG,
+        terrain_type="plane",
         max_init_terrain_level=None,
         collision_group=-1,
         visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.28, 0.30, 0.32)),
@@ -162,25 +216,49 @@ class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
     projected_loop_joint_names = []
     auto_collision_from_visuals = False
     strip_embedded_ground_prims = False
+    # When True, _reset_idx promotes envs to harder rows of the terrain
+    # generator if they walked far enough during the episode, and demotes
+    # envs that fell short. Requires terrain_type="generator" with
+    # curriculum=True (e.g. CURRICULUM_TERRAIN_CFG).
+    terrain_curriculum_enabled = False
     base_height_target = 0.32
     action_clip = 1.5
     visual_disable_resets = False
     commanded_lin_vel_xy = (1.0, 0.0)
     commanded_ang_vel_z = 0.0
     show_velocity_arrows = True
-    fall_height_threshold = 0.15
+    # Raised from 0.15 so a robot that "lies down" (body around 0.10-0.18m)
+    # terminates instead of farming alive/orientation reward forever.
+    fall_height_threshold = 0.22
     # cos(angle) threshold for "tipped over" detection on projected gravity.
-    # 0.7 ≈ 45° tilt from upright; raise toward 1.0 to terminate sooner.
-    fall_cos_threshold = 0.7
+    # 0.85 ≈ 32° tilt from upright; raise toward 1.0 to terminate sooner.
+    fall_cos_threshold = 0.85
+    # Reward weights tuned to break the "stand still" local optimum:
+    #   - `alive` is removed: a 0.5/step freebie was outweighing the
+    #     small lin-vel tracking reward early in training.
+    #   - `track_ang_vel_z` is reduced (was 1.0) because exp(0) gives a
+    #     full payout for a robot that simply isn't rotating.
+    #   - `base_height` and `flat_orientation` are strong L2 penalties so
+    #     drooping or tipping is expensive (no exp saturation).
+    #   - `track_lin_vel_xy` is bumped so forward motion dominates.
+    #   - Penalties on joint_vel / action_rate / lin_vel_z / ang_vel_xy are
+    #     held small so PPO can still freely jitter legs during exploration
+    #     without the gait being immediately drowned out by penalties.
     reward_scales = {
-        "alive": 0.5,
-        "upright": 0.25,
-        "base_height": -1.0,
-        "lin_vel_z": -1.0,
-        "ang_vel_xy": -0.05,
-        "joint_vel": -0.0005,
-        "action_rate": -0.01,
-        "track_lin_vel_xy": 2.0,
-        "track_ang_vel_z": 1.0,
+        "alive": 0.0,
+        "upright": 0.0,
+        "flat_orientation": -2.5,
+        "base_height": -10.0,
+        "lin_vel_z": -0.5,
+        "ang_vel_xy": -0.02,
+        "joint_vel": -0.0001,
+        "action_rate": -0.003,
+        "track_lin_vel_xy": 4.0,
+        "track_ang_vel_z": 0.5,
         "custom_reward": 0.0,
     }
+    # Bandwidth of the exp() in the velocity-tracking reward. Wider band
+    # means partial progress (e.g. moving at 0.4 m/s when commanded 1.0)
+    # still earns a useful gradient toward the target instead of bottoming
+    # out near 0 like a narrow Gaussian would.
+    tracking_sigma = 1.0

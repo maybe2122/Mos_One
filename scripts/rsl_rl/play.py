@@ -18,6 +18,16 @@ parser.add_argument(
     default=False,
     help="Disable environment reset during visual play so short or unstable policies do not instantly jump back to the start pose.",
 )
+parser.add_argument(
+    "--terrain",
+    type=str,
+    default="flat",
+    choices=["flat", "rough", "curriculum"],
+    help=(
+        "Ground terrain: 'flat' (plane, default), 'rough' (procedural heightfield), "
+        "or 'curriculum' (start flat, progress to rough + stairs as envs succeed)."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + hydra_args
@@ -43,6 +53,10 @@ from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import stackforce_simready_mos2026_2_closed_usd_closed_usd_lab.tasks  # noqa: F401
+from stackforce_simready_mos2026_2_closed_usd_closed_usd_lab.tasks.direct.mos2026_2_closed_usd.mos2026_2_closed_usd_env_cfg import (
+    CURRICULUM_TERRAIN_CFG,
+    ROUGH_TERRAIN_CFG,
+)
 
 
 def _runner_uses_obs_groups():
@@ -243,6 +257,22 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRun
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
     if args_cli.disable_resets and hasattr(env_cfg, "visual_disable_resets"):
         env_cfg.visual_disable_resets = True
+    if args_cli.terrain == "rough":
+        env_cfg.terrain.terrain_type = "generator"
+        env_cfg.terrain.terrain_generator = ROUGH_TERRAIN_CFG
+        env_cfg.terrain.max_init_terrain_level = None
+        env_cfg.terrain_curriculum_enabled = False
+    elif args_cli.terrain == "curriculum":
+        env_cfg.terrain.terrain_type = "generator"
+        env_cfg.terrain.terrain_generator = CURRICULUM_TERRAIN_CFG
+        # On play, no curriculum advancement — keep envs at their initial
+        # level so behaviour on every terrain row is observable.
+        env_cfg.terrain.max_init_terrain_level = None
+        env_cfg.terrain_curriculum_enabled = False
+    else:
+        env_cfg.terrain.terrain_type = "plane"
+        env_cfg.terrain.terrain_generator = None
+        env_cfg.terrain_curriculum_enabled = False
     log_root_path = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name))
     checkpoint_arg = args_cli.checkpoint
     resume_path = os.path.abspath(checkpoint_arg) if os.path.isfile(checkpoint_arg) else get_checkpoint_path(
@@ -252,16 +282,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRun
     env = gym.make(args_cli.task, cfg=env_cfg)
     wrapped_env = LegacyRslRlVecEnvWrapper(env, clip_actions=getattr(agent_cfg, "clip_actions", None))
     runner = OnPolicyRunner(wrapped_env, to_compatible_rsl_rl_cfg(agent_cfg), log_dir=None, device=env.unwrapped.device)
-    runner.load(resume_path, load_optimizer=False)
+    runner.load(resume_path)
     policy = runner.get_inference_policy(device=env.unwrapped.device)
     obs_dict, _ = env.reset()
-    obs = obs_dict["policy"]
     steps = 0
     with torch.inference_mode():
         while simulation_app.is_running():
-            actions = policy(obs)
+            actions = policy(obs_dict)
             obs_dict, _, _, _, _ = env.step(actions)
-            obs = obs_dict["policy"]
             steps += 1
             if args_cli.num_steps > 0 and steps >= args_cli.num_steps:
                 break

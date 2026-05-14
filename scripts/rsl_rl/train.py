@@ -15,6 +15,16 @@ parser.add_argument("--seed", type=int, default=None)
 parser.add_argument("--max_iterations", type=int, default=None)
 parser.add_argument("--run_name", type=str, default=None)
 parser.add_argument("--checkpoint", type=str, default=None)
+parser.add_argument(
+    "--terrain",
+    type=str,
+    default="flat",
+    choices=["flat", "rough", "curriculum"],
+    help=(
+        "Ground terrain: 'flat' (plane, default), 'rough' (procedural heightfield), "
+        "or 'curriculum' (start flat, progress to rough + stairs as envs succeed)."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + hydra_args
@@ -41,6 +51,10 @@ from isaaclab_rl.rsl_rl import RslRlBaseRunnerCfg
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import stackforce_simready_mos2026_2_closed_usd_closed_usd_lab.tasks  # noqa: F401
+from stackforce_simready_mos2026_2_closed_usd_closed_usd_lab.tasks.direct.mos2026_2_closed_usd.mos2026_2_closed_usd_env_cfg import (
+    CURRICULUM_TERRAIN_CFG,
+    ROUGH_TERRAIN_CFG,
+)
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -266,6 +280,23 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRun
         agent_cfg.run_name = args_cli.run_name
     env_cfg.seed = agent_cfg.seed
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+
+    if args_cli.terrain == "rough":
+        env_cfg.terrain.terrain_type = "generator"
+        env_cfg.terrain.terrain_generator = ROUGH_TERRAIN_CFG
+        env_cfg.terrain.max_init_terrain_level = None
+        env_cfg.terrain_curriculum_enabled = False
+    elif args_cli.terrain == "curriculum":
+        env_cfg.terrain.terrain_type = "generator"
+        env_cfg.terrain.terrain_generator = CURRICULUM_TERRAIN_CFG
+        # Start every env on the easiest row (flat) so the curriculum begins
+        # at the bottom and walks up only after the policy succeeds.
+        env_cfg.terrain.max_init_terrain_level = 0
+        env_cfg.terrain_curriculum_enabled = True
+    else:
+        env_cfg.terrain.terrain_type = "plane"
+        env_cfg.terrain.terrain_generator = None
+        env_cfg.terrain_curriculum_enabled = False
 
     log_root_path = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name))
     log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")

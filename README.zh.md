@@ -1,102 +1,149 @@
-# StackForce SimReady 闭链 USD Isaac Lab / Isaac Sim 导出工程
+# StackForce SimReady — 闭链 USD · Isaac Lab / Isaac Sim 导出工程
 
-这个工程由 StackForce SimReady 导出，适用于已经在 Isaac Sim 中准备好的闭链 USD 机器人。
+> 由 **StackForce SimReady** 自动导出,针对已在 Isaac Sim 中装配完成的**闭链(closed-chain)USD** 机器人,开箱即用。
 
-## 直接可复制的命令
+---
+
+## 一分钟上手
 
 ```bash
+# 1. 激活你已有的 Isaac Lab 环境
 conda activate <你自己的IsaacLab环境名称>
+
+# 2. 安装导出工程
 cd <exported_project>
-python -m pip install -e source/stackforce_simready_mos2026_2_closed_usd_closed_usd_lab
+uv pip install -e source/stackforce_simready_mos2026_2_closed_usd_closed_usd_lab
+
+# 3. 检查环境注册情况
 python scripts/list_envs.py
 python scripts/inspect_usd.py --headless
-python scripts/zero_agent.py --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 --headless --num_envs 4 --num_steps 200
+
+# 4. 用 zero / random agent 跑一遍,确认 USD 加载正常
+python scripts/zero_agent.py   --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 --headless --num_envs 4 --num_steps 200
 python scripts/random_agent.py --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 --headless --num_envs 4 --num_steps 200
+
+# 5. 开始 PPO 训练(先跑 20 个 iteration 做冒烟验证)
 python scripts/rsl_rl/train.py --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 --headless --num_envs 16 --max_iterations 20
 ```
 
-闭链 USD 的随机动作会默认保持若干步，避免每帧高频随机在视觉上互相抵消。需要肉眼检查关节驱动时，可以使用正弦动作：
+> **常用开关**
+> - 想打开 Isaac Sim 窗口看效果:去掉 `--headless`
+> - 想一直播放直到手动关窗口:`--num_steps 0`
+
+---
+
+## 可视化调试关节驱动
+
+闭链 USD 的随机动作默认会保持若干步,避免每帧高频随机在视觉上互相抵消。需要肉眼检查关节驱动时,可以用正弦步态:
 
 ```bash
-python scripts/random_agent.py --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 --num_envs 1 --num_steps 0 --motion_mode gait --action_gain 0.1
+python scripts/random_agent.py \
+    --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
+    --num_envs 1 --num_steps 0 \
+    --motion_mode gait --action_gain 0.1
 ```
 
-想打开 Isaac Sim 窗口时，去掉 `--headless`。想持续播放直到手动关闭窗口时，把 `--num_steps` 设为 `0`。
+---
 
-### 推荐 Isaac Lab / Isaac Sim 环境
+## 推荐 Isaac Lab / Isaac Sim 环境
 
-本导出工程推荐使用下面这套已验证配置：
+下面是已验证可用的版本组合:
 
-```text
-Python 3.11
-Isaac Sim 5.1.0
-Isaac Lab v2.3.2 / pip 2.3.2.post1
-Torch 2.7.0+cu128
-Torchvision 0.22.0+cu128
-LeggedGym-Ex 0.3.0 提供的 rsl_rl
-```
+| 组件 | 版本 |
+| --- | --- |
+| Python | 3.11 |
+| Isaac Sim | 5.1.0 |
+| Isaac Lab | v2.3.2 / pip 2.3.2.post1 |
+| Torch | 2.7.0+cu128 |
+| Torchvision | 0.22.0+cu128 |
+| rsl_rl | 由 LeggedGym-Ex 0.3.0 提供 |
 
-导出包内已包含一键环境脚本：
+### 一键安装脚本
 
 ```bash
 chmod +x scripts/setup_stackforce_isaac_lab_sim_env.sh
 ./scripts/setup_stackforce_isaac_lab_sim_env.sh
 ```
 
-脚本默认创建 `env_isaaclab`。如果你想改环境名：
+脚本默认创建 `env_isaaclab`。要改环境名:
 
 ```bash
 ENV_NAME=my_isaaclab ./scripts/setup_stackforce_isaac_lab_sim_env.sh
 ```
 
+### 多 GPU 机器:窗口无法显示
 
-如果是多 GPU 机器且窗口无法显示，请确认显示器连接在哪张 GPU 上：
+先确认显示器接在哪张 GPU 上,再用对应 GPU 启动:
 
 ```bash
 nvidia-smi --query-gpu=index,pci.bus_id,name,display_active --format=csv,noheader
-CUDA_VISIBLE_DEVICES=<display_active 为 Enabled 的 GPU index> python scripts/rsl_rl/play.py --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 --checkpoint <checkpoint.pt> --num_envs 1 --disable_resets
+
+CUDA_VISIBLE_DEVICES=<display_active 为 Enabled 的 GPU index> \
+    python scripts/rsl_rl/play.py \
+        --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
+        --checkpoint <checkpoint.pt> \
+        --num_envs 1 --disable_resets
 ```
+
+---
 
 ## 播放训练结果
 
 ```bash
+# 找到最新的 checkpoint
 find logs -name "*.pt" | sort | tail -n 1
-python scripts/rsl_rl/play.py --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 --checkpoint <上一步找到的.pt文件> --num_envs 1 --disable_resets
+
+# 播放
+python scripts/rsl_rl/play.py \
+    --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
+    --checkpoint <上一步找到的 .pt 文件> \
+    --num_envs 1 --disable_resets
 ```
+
+---
 
 ## 闭链 USD 注意事项
 
-闭链机器人不要再走 URDF converter。这个导出包直接使用：
+闭链机器人**不要**再走 URDF Converter。本导出包直接使用:
 
 ```text
 mos2026_2.usd
 ```
 
-如果你移动整个工程，请在新目录重新运行：
+> 如果你把整个工程移到新目录,请在新目录重新执行:
+> ```bash
+> python -m pip install -e source/stackforce_simready_mos2026_2_closed_usd_closed_usd_lab
+> ```
 
-```bash
-python -m pip install -e source/stackforce_simready_mos2026_2_closed_usd_closed_usd_lab
-```
+---
 
-## 自定义 reward
+## 自定义 Reward
 
-编辑：
-
-```text
-source/stackforce_simready_mos2026_2_closed_usd_closed_usd_lab/stackforce_simready_mos2026_2_closed_usd_closed_usd_lab/tasks/direct/mos2026_2_closed_usd/custom_rewards.py
-```
-
-然后在 `compute_custom_reward_terms(env)` 返回新的 reward tensor，并在：
+**1. 编辑 reward 实现**
 
 ```text
-source/stackforce_simready_mos2026_2_closed_usd_closed_usd_lab/stackforce_simready_mos2026_2_closed_usd_closed_usd_lab/tasks/direct/mos2026_2_closed_usd/mos2026_2_closed_usd_env_cfg.py
+source/stackforce_simready_mos2026_2_closed_usd_closed_usd_lab/
+  stackforce_simready_mos2026_2_closed_usd_closed_usd_lab/
+    tasks/direct/mos2026_2_closed_usd/custom_rewards.py
 ```
 
-把对应 `reward_scales` 改成非零值。
+在 `compute_custom_reward_terms(env)` 中返回新的 reward tensor。
+
+**2. 调整 reward 权重**
+
+```text
+source/stackforce_simready_mos2026_2_closed_usd_closed_usd_lab/
+  stackforce_simready_mos2026_2_closed_usd_closed_usd_lab/
+    tasks/direct/mos2026_2_closed_usd/mos2026_2_closed_usd_env_cfg.py
+```
+
+把对应的 `reward_scales` 改成非零值。
+
+---
 
 ## 来源
 
-- Robot: mos2026 2
-- Source: user-uploaded USD package
-- Imported from the unified URDF/USD upload path.
-- Set the actuated joint names in the Mapping card before exporting a trainable Isaac Lab project.
+- **Robot:** mos2026 2
+- **Source:** user-uploaded USD package
+- **Pipeline:** Imported from the unified URDF/USD upload path
+- **Mapping:** 导出可训练 Isaac Lab 工程前,需在 Mapping card 中设置 actuated joint names

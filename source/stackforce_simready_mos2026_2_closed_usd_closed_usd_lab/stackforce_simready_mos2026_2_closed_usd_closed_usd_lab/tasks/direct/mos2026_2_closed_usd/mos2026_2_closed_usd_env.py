@@ -232,16 +232,21 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
         cmd_xy = torch.tensor(self.cfg.commanded_lin_vel_xy, device=self.device).expand(self.num_envs, 2)
         lin_vel_xy_err = torch.sum(torch.square(cmd_xy - lin_vel_b[:, :2]), dim=1)
         ang_vel_yaw_err = torch.square(self.cfg.commanded_ang_vel_z - ang_vel_b[:, 2])
+        tracking_sigma = float(getattr(self.cfg, "tracking_sigma", 0.25))
         rewards = {
             "alive": torch.ones(self.num_envs, device=self.device) * scales.get("alive", 0.0),
             "upright": torch.exp(-upright_error / 0.25) * scales.get("upright", 0.0),
+            # L2 penalty version of the orientation term — no exp saturation, so
+            # the more the robot tips, the more it pays. This is what actually
+            # punishes the "lying down" pose, since `upright` plateaus near 0.
+            "flat_orientation": upright_error * scales.get("flat_orientation", 0.0),
             "base_height": base_height_error * scales.get("base_height", 0.0),
             "lin_vel_z": lin_vel_z * scales.get("lin_vel_z", 0.0),
             "ang_vel_xy": ang_vel_xy * scales.get("ang_vel_xy", 0.0),
             "joint_vel": joint_vel * scales.get("joint_vel", 0.0),
             "action_rate": action_rate * scales.get("action_rate", 0.0),
-            "track_lin_vel_xy": torch.exp(-lin_vel_xy_err / 0.25) * scales.get("track_lin_vel_xy", 0.0),
-            "track_ang_vel_z": torch.exp(-ang_vel_yaw_err / 0.25) * scales.get("track_ang_vel_z", 0.0),
+            "track_lin_vel_xy": torch.exp(-lin_vel_xy_err / tracking_sigma) * scales.get("track_lin_vel_xy", 0.0),
+            "track_ang_vel_z": torch.exp(-ang_vel_yaw_err / tracking_sigma) * scales.get("track_ang_vel_z", 0.0),
         }
         for key, value in compute_custom_reward_terms(self).items():
             rewards[key] = rewards.get(key, torch.zeros_like(value)) + value * scales.get(key, 0.0)
@@ -281,6 +286,7 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
     def _reset_idx(self, env_ids: torch.Tensor | None):
         if env_ids is None or len(env_ids) == self.num_envs:
             env_ids = self._robot._ALL_INDICES
+        self._update_terrain_curriculum(env_ids)
         self._robot.reset(env_ids)
         super()._reset_idx(env_ids)
         if len(env_ids) == self.num_envs:
@@ -298,3 +304,22 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
         self._robot.set_joint_velocity_target(joint_vel, env_ids=env_ids)
         for key in self._episode_sums.keys():
             self._episode_sums[key][env_ids] = 0.0
+
+    def _update_terrain_curriculum(self, env_ids: torch.Tensor):
+        # Promote envs that walked at least half the sub-terrain size during
+        # the episode; demote envs that covered less than half the distance
+        # the commanded velocity would have produced. Mirrors the
+        # `terrain_levels_vel` curriculum from Isaac Lab's locomotion tasks.
+        if not getattr(self.cfg, "terrain_curriculum_enabled", False):
+            return
+        if getattr(self._terrain, "terrain_origins", None) is None:
+            return
+        distance_walked = torch.norm(
+            self._robot.data.root_pos_w[env_ids, :2] - self._terrain.env_origins[env_ids, :2], dim=1
+        )
+        terrain_size = self.cfg.terrain.terrain_generator.size[0]
+        cmd_xy = torch.tensor(self.cfg.commanded_lin_vel_xy, device=self.device, dtype=distance_walked.dtype)
+        expected_distance = torch.norm(cmd_xy) * self.max_episode_length * self.step_dt
+        move_up = distance_walked > terrain_size / 2
+        move_down = (distance_walked < expected_distance * 0.5) & ~move_up
+        self._terrain.update_env_origins(env_ids, move_up, move_down)

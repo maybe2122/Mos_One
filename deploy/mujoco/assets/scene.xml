@@ -1,0 +1,3 @@
+<mujoco model="mos2026_2_scene">
+  <include file="mos2026_2.xml"/>
+</mujoco>
