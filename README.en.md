@@ -23,6 +23,61 @@ python scripts/random_agent.py --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 
 
 Remove `--headless` to show the Isaac Sim window. Set `--num_steps 0` to keep playing until you close the window manually.
 
+## Training Script Arguments (`scripts/rsl_rl/train.py`)
+
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--task` | str | required | Gym task ID, e.g. `StackForce-Mos20262ClosedUsd-ClosedUsd-v0` |
+| `--num_envs` | int | task default | Number of parallel envs. Start small (16) for debugging, 4096 for full PPO runs |
+| `--max_iterations` | int | task default (1500) | PPO learning iterations. Use 20 for smoke tests |
+| `--seed` | int | task default | Random seed |
+| `--run_name` | str | `""` | Suffix appended to the log directory for easier experiment comparison |
+| `--checkpoint` | str | `None` | Path to a `.pt` file (resume is handled by RSL-RL internals) |
+| `--agent` | str | `rsl_rl_cfg_entry_point` | Hydra agent config entry, rarely changed |
+| `--terrain` | str | `flat` | Terrain mode: `flat` / `rough` / `curriculum` (see below) |
+
+### `--terrain` options
+
+| Value | Terrain | Curriculum | Use case |
+| --- | --- | --- | --- |
+| `flat` | Ground plane | Off | Default. Start a fresh policy, tune rewards |
+| `rough` | Procedural heightfield | Off | Train on fixed rough terrain |
+| `curriculum` | Flat → rough + stairs | On | All envs start at row 0; difficulty advances after success |
+
+### AppLauncher pass-through arguments
+
+`AppLauncher.add_app_launcher_args(parser)` injects the standard Isaac Sim flags. The most common ones:
+
+| Argument | Description |
+| --- | --- |
+| `--headless` | Disable the GUI. Required for training runs |
+| `--device cuda:0` | Pick the GPU. Useful on multi-GPU hosts |
+| `--enable_cameras` | Enable camera rendering (uses extra VRAM, off by default) |
+| `--livestream {0,1,2}` | Stream to Omniverse Streaming Client / WebRTC for remote viewing |
+
+### Full examples
+
+```bash
+# 1. Smoke test: 20 iterations, tiny env count
+python scripts/rsl_rl/train.py \
+    --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
+    --headless --num_envs 16 --max_iterations 20
+
+# 2. Full training run with a named experiment
+python scripts/rsl_rl/train.py \
+    --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
+    --headless --num_envs 4096 --max_iterations 1500 \
+    --seed 42 --run_name baseline_flat
+
+# 3. Curriculum terrain
+python scripts/rsl_rl/train.py \
+    --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
+    --headless --num_envs 4096 --terrain curriculum \
+    --run_name curriculum_v1
+```
+
+Logs land in `logs/rsl_rl/<experiment_name>/<timestamp>[_<run_name>]/`. The final checkpoint is `model_final.pt`; intermediates are `model_*.pt`.
+
 ### Recommended Isaac Lab / Isaac Sim Environment
 
 This export is recommended with the validated stack below:
@@ -58,6 +113,22 @@ CUDA_VISIBLE_DEVICES=<GPU index with display_active Enabled> python scripts/rsl_
 ```
 
 ## Play A Trained Policy
+
+One-click script that auto-selects the most recent `.pt` under `logs/`:
+
+```bash
+# Default: 20 envs with resets disabled
+./scripts/rsl_rl/play_latest.sh
+
+# Forward any extra flags straight to play.py
+./scripts/rsl_rl/play_latest.sh --num_envs 1 --num_steps 0 --disable_resets
+
+# Override task / log directory with env vars
+TASK=StackForce-Mos20262ClosedUsd-ClosedUsd-v0 LOGS_DIR=logs \
+    ./scripts/rsl_rl/play_latest.sh
+```
+
+To pick a checkpoint manually, call play.py directly:
 
 ```bash
 find logs -name "*.pt" | sort | tail -n 1

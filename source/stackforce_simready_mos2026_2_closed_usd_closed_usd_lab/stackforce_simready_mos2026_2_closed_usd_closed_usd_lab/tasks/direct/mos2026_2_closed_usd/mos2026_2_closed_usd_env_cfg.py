@@ -14,10 +14,10 @@ from isaaclab.utils import configclass
 ROUGH_TERRAIN_CFG = TerrainGeneratorCfg(
     # Each sub-terrain is 8x8 m. With 3x3 cells we cover 24x24 m, plenty of room
     # for 128 envs at env_spacing=4 to fit on the heightfield.
-    size=(8.0, 8.0),
+    size=(16.0, 16.0),
     border_width=10.0,
-    num_rows=3,
-    num_cols=3,
+    num_rows=6,
+    num_cols=6,
     horizontal_scale=0.1,
     vertical_scale=0.005,
     slope_threshold=0.75,
@@ -96,14 +96,37 @@ USD_PATH = ASSET_DIR / "mos2026_2.usd"
 class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
     episode_length_s = 20.0
     decimation = 4
-    # Per-step joint-target deflection from the default pose, in radians.
-    # 0.5 rad ≈ 29°; combined with `action_clip=1.5` the policy can reach
-    # ±0.75 rad ≈ ±43° from the nominal stance.
-    action_scale = 0.5
+    # Per-joint deflection coefficient (rad) relative to the default pose.
+    # joint_target = default + action_scale * clamp(action, ±action_clip).
+    # With action_clip=1.5:
+    #   hip:           0.5    -> ±0.75 rad   ≈ ±43°
+    #   thigh / shank: 0.8145 -> ±1.2217 rad ≈ ±70°
+    # Tuple length and order must match `actuated_joint_names` below.
+    action_scale = (
+        0.5, 0.5, 0.5, 0.5,                      # fl_hip, fr_hip, rl_hip, rr_hip
+        0.8145, 0.8145, 0.8145, 0.8145,          # fl_thigh, fr_thigh, rl_thigh, rr_thigh
+        0.8145, 0.8145, 0.8145, 0.8145,          # *_shank_link*
+    )
+    # "position": actions are joint-angle deltas added to the default pose
+    #             and sent via set_joint_position_target (closed-loop PD).
+    # "effort":   actions are torques scaled by action_scale and applied via
+    #             set_joint_effort_target (open-loop torque control).
     action_control_mode = "position"
+    # Dimension of the policy action vector. Must equal len(actuated_joint_names)
+    # — one scalar per actuated joint (4 hips + 4 thighs + 4 shanks = 12).
     action_space = 12
+    # Dimension of the policy observation vector. Built in env._get_observations:
+    #   root_lin_vel_b (3) + root_ang_vel_b (3) + projected_gravity_b (3)
+    # + commanded_lin_vel_xy (2) + commanded_ang_vel_z (1)
+    # + joint_pos - default_joint_pos (12) + joint_vel (12) + last_actions (12)
+    # = 45. Update this number whenever the obs cat in env.py changes.
     observation_space = 45
+    # Privileged "critic-only" observation size. 0 disables the asymmetric
+    # critic; set >0 and emit a "critic" key in _get_observations to use it.
     state_space = 0
+    # GUI camera pose for non-headless runs (also used by --livestream). `eye`
+    # is the camera position, `lookat` is the target point, both in meters in
+    # world space; `resolution` is the rendered window size.
     viewer = ViewerCfg(
         eye=(3.0, -4.0, 2.0),
         lookat=(0.0, 0.0, 0.45),
@@ -122,13 +145,15 @@ class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
             restitution=0.0,
         ),
         # Rough heightfield terrain + closed-chain articulation produce many
-        # more broad-phase pairs than the PhysX defaults expect. Bump the GPU
-        # buffers above defaults, but keep them small enough to fit on an
-        # 11 GB consumer GPU (2**28 aggregate pairs would try to allocate ~2 GB).
+        # more broad-phase pairs than the PhysX defaults expect. Sized for a
+        # 32 GB GPU — these caps reserve roughly 8-10 GB of VRAM for PhysX
+        # broad-phase buffers, leaving the rest for the policy and rendering.
         physx=PhysxCfg(
-            gpu_found_lost_pairs_capacity=2**22,
-            gpu_found_lost_aggregate_pairs_capacity=2**26,
-            gpu_total_aggregate_pairs_capacity=2**22,
+            gpu_found_lost_pairs_capacity=2**25,
+            gpu_found_lost_aggregate_pairs_capacity=2**29,
+            gpu_total_aggregate_pairs_capacity=2**26,
+            gpu_max_rigid_contact_count=2**24,
+            gpu_max_rigid_patch_count=2**21,
         ),
     )
 
@@ -152,7 +177,7 @@ class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
 
     # Closed-chain USD assets may embed their own PhysicsScene. Replicating those
     # scene prims can trigger PhysX clone errors, so keep cloning conservative.
-    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=128, env_spacing=4.0, replicate_physics=False)
+    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=4096, env_spacing=4.0, replicate_physics=False)
 
     robot: ArticulationCfg = ArticulationCfg(
         prim_path="/World/envs/env_.*/Robot",
@@ -201,7 +226,7 @@ class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
                 ],
                 stiffness=25.0,
                 damping=0.5,
-                effort_limit_sim=80.0,
+                effort_limit_sim=30.0,
                 velocity_limit_sim=30.0,
             ),
         },

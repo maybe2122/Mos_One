@@ -34,6 +34,17 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
         self._capture_usd_default_joint_state()
         self._actions = torch.zeros(self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device)
         self._previous_actions = torch.zeros_like(self._actions)
+        action_scale_cfg = self.cfg.action_scale
+        if isinstance(action_scale_cfg, (int, float)):
+            self._action_scale = float(action_scale_cfg)
+        else:
+            scale = torch.as_tensor(action_scale_cfg, dtype=torch.float, device=self.device)
+            if scale.numel() != len(self._actuated_joint_ids):
+                raise RuntimeError(
+                    f"action_scale length {scale.numel()} does not match "
+                    f"actuated_joint count {len(self._actuated_joint_ids)}"
+                )
+            self._action_scale = scale
         self._episode_sums = {
             key: torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
             for key in self.cfg.reward_scales.keys()
@@ -144,10 +155,10 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
     def _pre_physics_step(self, actions: torch.Tensor):
         self._actions = torch.clamp(actions.clone(), -self.cfg.action_clip, self.cfg.action_clip)
         if self.cfg.action_control_mode == "effort":
-            self._processed_actions = self.cfg.action_scale * self._actions
+            self._processed_actions = self._action_scale * self._actions
         else:
             default_pos = self._robot.data.default_joint_pos[:, self._actuated_joint_ids]
-            self._processed_actions = self.cfg.action_scale * self._actions + default_pos
+            self._processed_actions = self._action_scale * self._actions + default_pos
 
     def _apply_action(self):
         if self.cfg.action_control_mode == "effort":

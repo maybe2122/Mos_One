@@ -32,6 +32,63 @@ python scripts/rsl_rl/train.py --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 
 
 ---
 
+## 训练脚本参数 (`scripts/rsl_rl/train.py`)
+
+| 参数 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `--task` | str | 必填 | Gym 任务 ID,本工程为 `StackForce-Mos20262ClosedUsd-ClosedUsd-v0` |
+| `--num_envs` | int | 任务默认 | 并行环境数。显存吃紧先用 16,稳定后 4096 提速 |
+| `--max_iterations` | int | 任务默认 (1500) | PPO 学习迭代次数,冒烟可用 20 |
+| `--seed` | int | 任务默认 | 随机种子 |
+| `--run_name` | str | `""` | 给本次训练加后缀,出现在日志目录名里,方便对比实验 |
+| `--checkpoint` | str | `None` | 续训用的 `.pt` 路径(目前由 RSL-RL 内部恢复) |
+| `--agent` | str | `rsl_rl_cfg_entry_point` | Hydra agent 配置入口,通常不用改 |
+| `--terrain` | str | `flat` | 地形:`flat` / `rough` / `curriculum`(详见下表) |
+
+### `--terrain` 选项
+
+| 取值 | 地形 | 课程学习 | 用途 |
+| --- | --- | --- | --- |
+| `flat` | 平地 | 关 | 默认,新策略起步、调奖励 |
+| `rough` | 程序生成高度场 | 关 | 直接训练崎岖地形,难度恒定 |
+| `curriculum` | 平地 → 崎岖 + 楼梯 | 开 | 所有 env 从第 0 行起步,跑稳后自动升级难度 |
+
+### AppLauncher 透传参数
+
+`AppLauncher.add_app_launcher_args(parser)` 会注入 Isaac Sim 的标准参数,常用如下:
+
+| 参数 | 说明 |
+| --- | --- |
+| `--headless` | 不启用 GUI,训练务必开启 |
+| `--device cuda:0` | 指定 GPU,多卡机器需要 |
+| `--enable_cameras` | 启用相机渲染(占显存,默认关) |
+| `--livestream {0,1,2}` | 推流到 Omniverse Streaming Client / WebRTC,适合服务器训练时远程查看 |
+
+### 完整示例
+
+```bash
+# 1. 冒烟跑 20 个 iteration,小 env 验证管线
+python scripts/rsl_rl/train.py \
+    --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
+    --headless --num_envs 16 --max_iterations 20
+
+# 2. 正式训练,带 run_name 方便日志对比
+python scripts/rsl_rl/train.py \
+    --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
+    --headless --num_envs 4096 --max_iterations 1500 \
+    --seed 42 --run_name baseline_flat
+
+# 3. 课程学习地形上训练
+python scripts/rsl_rl/train.py \
+    --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
+    --headless --num_envs 4096 --terrain curriculum \
+    --run_name curriculum_v1
+```
+
+> 日志目录:`logs/rsl_rl/<experiment_name>/<时间戳>[_<run_name>]/`,checkpoint 落在 `model_final.pt` 与 `model_*.pt`。
+
+---
+
 ## 可视化调试关节驱动
 
 闭链 USD 的随机动作默认会保持若干步,避免每帧高频随机在视觉上互相抵消。需要肉眼检查关节驱动时,可以用正弦步态:
@@ -89,15 +146,28 @@ CUDA_VISIBLE_DEVICES=<display_active 为 Enabled 的 GPU index> \
 
 ## 播放训练结果
 
-```bash
-# 找到最新的 checkpoint
-find logs -name "*.pt" | sort | tail -n 1
+一键脚本会自动找出 `logs/` 下最新的 `.pt` 并启动 play.py:
 
-# 播放
+```bash
+# 默认: 20 envs + 关闭 reset
+./scripts/rsl_rl/play_latest.sh
+
+# 想改播放参数,直接在后面追加,会原样转发给 play.py
+./scripts/rsl_rl/play_latest.sh --num_envs 1 --num_steps 0 --disable_resets
+
+# 想换任务或日志目录,用环境变量覆盖
+TASK=StackForce-Mos20262ClosedUsd-ClosedUsd-v0 LOGS_DIR=logs \
+    ./scripts/rsl_rl/play_latest.sh
+```
+
+如果想手动选 checkpoint,也可以直接调用底层命令:
+
+```bash
+find logs -name "*.pt" | sort | tail -n 1
 python scripts/rsl_rl/play.py \
     --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
     --checkpoint <上一步找到的 .pt 文件> \
-    --num_envs 1 --disable_resets
+    --num_envs 20 --disable_resets
 ```
 
 ---
