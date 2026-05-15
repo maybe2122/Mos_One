@@ -18,11 +18,23 @@ parser.add_argument("--checkpoint", type=str, default=None)
 parser.add_argument(
     "--terrain",
     type=str,
-    default="flat",
+    default="curriculum",
     choices=["flat", "rough", "curriculum"],
     help=(
         "Ground terrain: 'flat' (plane, default), 'rough' (procedural heightfield), "
         "or 'curriculum' (start flat, progress to rough + stairs as envs succeed)."
+    ),
+)
+parser.add_argument(
+    "--max_gpu_mem",
+    type=float,
+    default=32.0,
+    help=(
+        "Target GPU memory budget in GB. The default PhysX broad-phase caps in "
+        "the env cfg are sized for a 32 GB card; pass a smaller value (e.g. "
+        "--max_gpu_mem 16, --max_gpu_mem 8) to scale every gpu_* capacity down "
+        "proportionally so the simulator fits on smaller GPUs. Does NOT change "
+        "num_envs — pair it with --num_envs if you also need fewer envs."
     ),
 )
 AppLauncher.add_app_launcher_args(parser)
@@ -270,6 +282,47 @@ def to_compatible_rsl_rl_cfg(agent_cfg):
     return {**runner_cfg, "policy": policy_cfg, "algorithm": algorithm_cfg}
 
 
+# PhysX broad-phase caps that consume GPU memory roughly linearly. Defaults
+# in the env cfg are sized for a 32 GB card; scaling these is what lets the
+# same task fit on a smaller GPU. Floors below are the smallest values PhysX
+# tolerates without throwing capacity-exceeded errors during contact-rich steps.
+_PHYSX_GPU_CAP_FIELDS = {
+    "gpu_found_lost_pairs_capacity":            2**18,   # 262144 floor
+    "gpu_found_lost_aggregate_pairs_capacity":  2**20,   # 1048576 floor
+    "gpu_total_aggregate_pairs_capacity":       2**18,   # 262144 floor
+    "gpu_max_rigid_contact_count":              2**18,   # 262144 floor
+    "gpu_max_rigid_patch_count":                2**16,   # 65536 floor
+}
+
+
+def _scale_physx_gpu_caps(env_cfg, max_gpu_mem_gb: float) -> None:
+    # 32 GB is the baseline the env cfg was authored for; scale linearly below
+    # that. Above 32 GB we leave the configured caps alone — they're already
+    # generous and growing them further wastes VRAM the policy could use.
+    if max_gpu_mem_gb is None or max_gpu_mem_gb >= 32.0:
+        return
+    physx = getattr(env_cfg.sim, "physx", None)
+    if physx is None:
+        return
+    scale = max(max_gpu_mem_gb / 32.0, 1.0 / 32.0)  # never scale below 1/32× of authored values
+    scaled = {}
+    for field, floor in _PHYSX_GPU_CAP_FIELDS.items():
+        current = getattr(physx, field, None)
+        if current is None:
+            continue
+        new_value = max(int(current * scale), floor)
+        setattr(physx, field, new_value)
+        scaled[field] = (current, new_value)
+    if scaled:
+        print(
+            f"[StackForce] Scaling PhysX GPU caps for {max_gpu_mem_gb:.1f} GB budget "
+            f"(scale={scale:.3f}):",
+            flush=True,
+        )
+        for field, (old, new) in scaled.items():
+            print(f"  {field}: {old} -> {new}", flush=True)
+
+
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
@@ -280,6 +333,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRun
         agent_cfg.run_name = args_cli.run_name
     env_cfg.seed = agent_cfg.seed
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+
+    _scale_physx_gpu_caps(env_cfg, args_cli.max_gpu_mem)
 
     if args_cli.terrain == "rough":
         env_cfg.terrain.terrain_type = "generator"

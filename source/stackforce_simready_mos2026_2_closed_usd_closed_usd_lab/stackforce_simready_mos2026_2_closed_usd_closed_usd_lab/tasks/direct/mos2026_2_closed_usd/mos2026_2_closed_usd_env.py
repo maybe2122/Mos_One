@@ -32,6 +32,8 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
                 f"matched_names={self._actuated_joint_names}"
             )
         self._capture_usd_default_joint_state()
+        self._resolve_foot_bodies()
+        self._resolve_symmetry_joint_groups()
         self._actions = torch.zeros(self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device)
         self._previous_actions = torch.zeros_like(self._actions)
         action_scale_cfg = self.cfg.action_scale
@@ -52,6 +54,59 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
         self._cmd_vel_arrow = None
         self._actual_vel_arrow = None
 
+    def _resolve_foot_bodies(self):
+        # 启动时把"脚"对应 body 的索引解析好，后面 foot_slip 奖励就能直接
+        # 用 self._robot.data.body_pos_w / body_lin_vel_w 索引拿数据，省开销。
+        # 这个闭链 USD 里没有专门的 foot 链接，所以用每条腿被驱动的小腿 body
+        # (`*_shank_link_a` 等) 当脚使——它本来就是每条腿最低的刚体。
+        expr = getattr(self.cfg, "foot_body_names_expr", None)
+        if not expr:
+            self._foot_body_ids: list[int] = []
+            self._foot_body_names: list[str] = []
+            return
+        try:
+            ids, names = self._robot.find_bodies(expr, preserve_order=True)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to resolve foot bodies with patterns {expr}: {exc}"
+            ) from exc
+        if not ids:
+            raise RuntimeError(
+                f"foot_body_names_expr={expr} matched no bodies. Available bodies: "
+                f"{self._robot.body_names}"
+            )
+        self._foot_body_ids = list(ids)
+        self._foot_body_names = list(names)
+        print(
+            f"[StackForce] Resolved {len(ids)} foot bodies for slip penalty: {names}",
+            flush=True,
+        )
+
+    def _resolve_symmetry_joint_groups(self):
+        # 解析左右对称步态奖励要用的关节索引。两个列表必须等长，且按腿/类型
+        # 一一对应（hip/thigh/shank），这样 `left[i]` 和 `right[i]` 共享同样
+        # 的默认偏置，做差才有意义。
+        left_names = getattr(self.cfg, "left_leg_joint_names", None) or []
+        right_names = getattr(self.cfg, "right_leg_joint_names", None) or []
+        if not left_names or not right_names:
+            self._sym_left_ids: list[int] = []
+            self._sym_right_ids: list[int] = []
+            return
+        if len(left_names) != len(right_names):
+            raise RuntimeError(
+                "left_leg_joint_names and right_leg_joint_names must have "
+                f"equal length (got {len(left_names)} vs {len(right_names)})"
+            )
+        left_ids, _ = self._robot.find_joints(left_names, preserve_order=True)
+        right_ids, _ = self._robot.find_joints(right_names, preserve_order=True)
+        if len(left_ids) != len(left_names) or len(right_ids) != len(right_names):
+            raise RuntimeError(
+                "Failed to resolve all symmetry joints; "
+                f"left {left_names} -> {left_ids}; right {right_names} -> {right_ids}"
+            )
+        self._sym_left_ids = list(left_ids)
+        self._sym_right_ids = list(right_ids)
+
     def _capture_usd_default_joint_state(self):
         # Closed-chain USD assets often rely on authored passive joint coordinates.
         # Isaac Lab's config defaults every joint to zero unless we explicitly preserve
@@ -70,6 +125,7 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
     def _setup_scene(self):
         self._robot = Articulation(self.cfg.robot)
         self._strip_embedded_ground_prims()
+        self._report_loop_joint_candidates()
         self._patch_projected_loop_joints()
         self._patch_missing_rigid_body_collisions()
         self.scene.articulations["robot"] = self._robot
@@ -80,6 +136,54 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
         self.scene.filter_collisions(global_prim_paths=[self.cfg.terrain.prim_path])
         light_cfg = sim_utils.DomeLightCfg(intensity=2400.0, color=(0.78, 0.82, 0.9))
         light_cfg.func("/World/Light", light_cfg)
+
+    def _report_loop_joint_candidates(self):
+        # When projected_loop_joint_names is empty, scan the stage for joints
+        # marked `physics:excludeFromArticulation=True` — those are exactly the
+        # closure joints PhysX solves outside the reduced-coordinate tree, and
+        # therefore the ones that need projection to stay numerically stable.
+        # Prints them at startup so the user can paste straight into cfg.
+        if getattr(self.cfg, "projected_loop_joint_names", None):
+            return
+        if not getattr(self.cfg, "auto_detect_loop_joints", False):
+            return
+        stage = get_current_stage()
+        excluded: list[str] = []
+        all_joint_names: list[str] = []
+        for prim in stage.TraverseAll():
+            if "Joint" not in str(prim.GetTypeName()):
+                continue
+            path = str(prim.GetPath())
+            if "/Robot/" not in path and not path.endswith("/Robot"):
+                continue
+            all_joint_names.append(prim.GetName())
+            attr = prim.GetAttribute("physics:excludeFromArticulation")
+            if attr and attr.IsValid() and attr.Get() is True:
+                excluded.append(prim.GetName())
+        if not all_joint_names:
+            return
+        if excluded:
+            unique = sorted(set(excluded))
+            print(
+                "[StackForce] projected_loop_joint_names is empty — detected "
+                f"{len(unique)} joints with excludeFromArticulation=True (these "
+                "are the closure joints that need projection):",
+                flush=True,
+            )
+            print(f"  {unique}", flush=True)
+            print(
+                "[StackForce] Copy that list into Mos20262ClosedUsdEnvCfg."
+                "projected_loop_joint_names and restart to enable projection.",
+                flush=True,
+            )
+        else:
+            print(
+                "[StackForce] projected_loop_joint_names is empty but no joints "
+                "with excludeFromArticulation=True were found under the robot prim. "
+                f"All joints seen ({len(set(all_joint_names))} unique): "
+                f"{sorted(set(all_joint_names))}",
+                flush=True,
+            )
 
     def _patch_projected_loop_joints(self):
         # Some closed-chain USD files model the closure joint as a regular
@@ -226,23 +330,97 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
             self._update_velocity_arrows()
         return {"policy": obs}
 
+    def _compute_gait_symmetry(self) -> torch.Tensor:
+        # 基于"幅度"的左右对称：比较左侧关节相对默认姿态偏离的平方和
+        # 与右侧的平方和。这种写法既能引导 policy 均匀使用两侧关节，
+        # 又允许走路时左右腿自然反相位交替——而瞬时左==右那种硬约束会
+        # 直接扼杀交替步态。
+        if not getattr(self, "_sym_left_ids", None) or not getattr(self, "_sym_right_ids", None):
+            return torch.zeros(self.num_envs, device=self.device)
+        left_ids = self._sym_left_ids
+        right_ids = self._sym_right_ids
+        joint_pos = self._robot.data.joint_pos
+        default_pos = self._robot.data.default_joint_pos
+        joint_pos = torch.nan_to_num(joint_pos, nan=0.0, posinf=0.0, neginf=0.0)
+        left_dev = joint_pos[:, left_ids] - default_pos[:, left_ids]
+        right_dev = joint_pos[:, right_ids] - default_pos[:, right_ids]
+        left_energy = torch.sum(torch.square(left_dev), dim=1)
+        right_energy = torch.sum(torch.square(right_dev), dim=1)
+        # 每侧能量都 clamp 一下，避免某个 env 物理炸掉时这一项独自把整个
+        # batch 的 reward 拉爆。
+        left_energy = torch.clamp(left_energy, 0.0, 25.0)
+        right_energy = torch.clamp(right_energy, 0.0, 25.0)
+        return torch.square(left_energy - right_energy)
+
+    def _compute_foot_slip(self) -> torch.Tensor:
+        # Slip penalty: while a foot is in contact (proxied by z-height
+        # near terrain origin), its world-frame xy velocity should be ≈ 0.
+        # Returns a per-env scalar = sum over feet of ||v_xy||² * contact_mask.
+        if not getattr(self, "_foot_body_ids", None):
+            return torch.zeros(self.num_envs, device=self.device)
+        foot_ids = self._foot_body_ids
+        foot_pos_w = self._robot.data.body_pos_w[:, foot_ids, :]
+        foot_lin_vel_w = self._robot.data.body_lin_vel_w[:, foot_ids, :]
+        foot_pos_w = torch.nan_to_num(foot_pos_w, nan=0.0, posinf=0.0, neginf=0.0)
+        foot_lin_vel_w = torch.nan_to_num(foot_lin_vel_w, nan=0.0, posinf=0.0, neginf=0.0)
+        terrain_z = self._terrain.env_origins[:, 2:3]  # (N, 1)
+        foot_height = foot_pos_w[..., 2] - terrain_z  # (N, num_feet)
+        threshold = float(getattr(self.cfg, "foot_contact_height_threshold", 0.06))
+        contact_mask = (foot_height < threshold).float()  # (N, num_feet)
+        foot_vel_xy_sq = torch.sum(torch.square(foot_lin_vel_w[..., :2]), dim=-1)  # (N, num_feet)
+        # Clamp before summing so a momentary PhysX glitch on one foot can't
+        # blow the reward up — capped at 25 m²/s² per foot (= |v|≤5 m/s).
+        foot_vel_xy_sq = torch.clamp(foot_vel_xy_sq, 0.0, 25.0)
+        return torch.sum(foot_vel_xy_sq * contact_mask, dim=-1)
+
     def _get_rewards(self) -> torch.Tensor:
         scales = self.cfg.reward_scales
-        root_height = self._robot.data.root_pos_w[:, 2] - self._terrain.env_origins[:, 2]
-        base_height_error = torch.square(root_height - self.cfg.base_height_target)
-        upright_error = torch.sum(torch.square(self._robot.data.projected_gravity_b[:, :2]), dim=1)
-        lin_vel_b = self._robot.data.root_lin_vel_b
-        ang_vel_b = self._robot.data.root_ang_vel_b
-        lin_vel_z = torch.square(lin_vel_b[:, 2])
-        ang_vel_xy = torch.sum(torch.square(ang_vel_b[:, :2]), dim=1)
-        joint_vel = torch.sum(torch.square(self._robot.data.joint_vel[:, self._actuated_joint_ids]), dim=1)
+        # Detect envs whose PhysX state went non-finite (closed-chain blow-up).
+        # These envs will be reset by _get_dones this step; zero their reward
+        # so PPO doesn't see garbage. Matches the checks in _get_dones.
+        root_pos_w = self._robot.data.root_pos_w
+        root_lin_vel_b = self._robot.data.root_lin_vel_b
+        root_ang_vel_b = self._robot.data.root_ang_vel_b
+        joint_pos_full = self._robot.data.joint_pos
+        joint_vel_full = self._robot.data.joint_vel
+        invalid_state = (
+            ~torch.isfinite(root_pos_w).all(dim=-1)
+            | ~torch.isfinite(root_lin_vel_b).all(dim=-1)
+            | ~torch.isfinite(root_ang_vel_b).all(dim=-1)
+            | ~torch.isfinite(joint_pos_full).all(dim=-1)
+            | ~torch.isfinite(joint_vel_full).all(dim=-1)
+        )
+
+        # Sanitize raw signals before any squaring. nan_to_num catches NaN/Inf;
+        # the clamps below catch the (more common) "large finite garbage" case
+        # where PhysX returns e.g. root_z = 1e13 after a constraint failure.
+        root_pos_w = torch.nan_to_num(root_pos_w, nan=0.0, posinf=0.0, neginf=0.0)
+        root_lin_vel_b = torch.nan_to_num(root_lin_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
+        root_ang_vel_b = torch.nan_to_num(root_ang_vel_b, nan=0.0, posinf=0.0, neginf=0.0)
+        joint_vel_act = torch.nan_to_num(
+            joint_vel_full[:, self._actuated_joint_ids], nan=0.0, posinf=0.0, neginf=0.0
+        )
+
+        root_height = root_pos_w[:, 2] - self._terrain.env_origins[:, 2]
+        # Clamp the height error so a teleported root can't produce a giant
+        # squared penalty. 2 m of height error is already off-the-charts wrong.
+        base_height_error = torch.clamp(torch.square(root_height - self.cfg.base_height_target), 0.0, 4.0)
+        # projected_gravity is unit-length by construction; clamp as belt-and-braces.
+        upright_error = torch.clamp(
+            torch.sum(torch.square(self._robot.data.projected_gravity_b[:, :2]), dim=1), 0.0, 2.0
+        )
+        lin_vel_z = torch.clamp(torch.square(root_lin_vel_b[:, 2]), 0.0, 100.0)
+        ang_vel_xy = torch.clamp(torch.sum(torch.square(root_ang_vel_b[:, :2]), dim=1), 0.0, 100.0)
+        joint_vel = torch.clamp(torch.sum(torch.square(joint_vel_act), dim=1), 0.0, 1.0e4)
         action_rate = torch.sum(torch.square(self._actions - self._previous_actions), dim=1)
+        foot_slip = self._compute_foot_slip()
+        gait_symmetry = self._compute_gait_symmetry()
         # Constant forward locomotion command. Without a tracking term the
         # policy converges to the "stand still" optimum allowed by the other
         # shaping terms, so add explicit xy/yaw tracking rewards.
         cmd_xy = torch.tensor(self.cfg.commanded_lin_vel_xy, device=self.device).expand(self.num_envs, 2)
-        lin_vel_xy_err = torch.sum(torch.square(cmd_xy - lin_vel_b[:, :2]), dim=1)
-        ang_vel_yaw_err = torch.square(self.cfg.commanded_ang_vel_z - ang_vel_b[:, 2])
+        lin_vel_xy_err = torch.sum(torch.square(cmd_xy - root_lin_vel_b[:, :2]), dim=1)
+        ang_vel_yaw_err = torch.square(self.cfg.commanded_ang_vel_z - root_ang_vel_b[:, 2])
         tracking_sigma = float(getattr(self.cfg, "tracking_sigma", 0.25))
         rewards = {
             "alive": torch.ones(self.num_envs, device=self.device) * scales.get("alive", 0.0),
@@ -256,12 +434,17 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
             "ang_vel_xy": ang_vel_xy * scales.get("ang_vel_xy", 0.0),
             "joint_vel": joint_vel * scales.get("joint_vel", 0.0),
             "action_rate": action_rate * scales.get("action_rate", 0.0),
+            "foot_slip": foot_slip * scales.get("foot_slip", 0.0),
+            "gait_symmetry": gait_symmetry * scales.get("gait_symmetry", 0.0),
             "track_lin_vel_xy": torch.exp(-lin_vel_xy_err / tracking_sigma) * scales.get("track_lin_vel_xy", 0.0),
             "track_ang_vel_z": torch.exp(-ang_vel_yaw_err / tracking_sigma) * scales.get("track_ang_vel_z", 0.0),
         }
         for key, value in compute_custom_reward_terms(self).items():
             rewards[key] = rewards.get(key, torch.zeros_like(value)) + value * scales.get(key, 0.0)
         reward = torch.sum(torch.stack(list(rewards.values())), dim=0) * self.step_dt
+        # Wipe rewards for envs whose state was non-finite this step. _get_dones
+        # will recycle them; PPO shouldn't see whatever number the math produced.
+        reward = torch.where(invalid_state, torch.zeros_like(reward), reward)
         reward = torch.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0)
         for key, value in rewards.items():
             if key in self._episode_sums:

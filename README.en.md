@@ -35,6 +35,7 @@ Remove `--headless` to show the Isaac Sim window. Set `--num_steps 0` to keep pl
 | `--checkpoint` | str | `None` | Path to a `.pt` file (resume is handled by RSL-RL internals) |
 | `--agent` | str | `rsl_rl_cfg_entry_point` | Hydra agent config entry, rarely changed |
 | `--terrain` | str | `flat` | Terrain mode: `flat` / `rough` / `curriculum` (see below) |
+| `--max_gpu_mem` | float | `32.0` | GPU memory budget in GB. The env cfg's PhysX `gpu_*` caps are sized for a 32 GB card; pass a smaller value (16 / 8) to scale every cap down proportionally and avoid OOM on smaller GPUs |
 
 ### `--terrain` options
 
@@ -74,6 +75,17 @@ python scripts/rsl_rl/train.py \
     --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
     --headless --num_envs 4096 --terrain curriculum \
     --run_name curriculum_v1
+
+# 4. Smaller GPUs (16 GB / 8 GB): scale PhysX caps and env count together
+python scripts/rsl_rl/train.py \
+    --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
+    --headless --num_envs 2048 --max_gpu_mem 16 \
+    --max_iterations 1500 --run_name gpu16
+
+python scripts/rsl_rl/train.py \
+    --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
+    --headless --num_envs 1024 --max_gpu_mem 8 \
+    --max_iterations 1500 --run_name gpu8
 ```
 
 Logs land in `logs/rsl_rl/<experiment_name>/<timestamp>[_<run_name>]/`. The final checkpoint is `model_final.pt`; intermediates are `model_*.pt`.

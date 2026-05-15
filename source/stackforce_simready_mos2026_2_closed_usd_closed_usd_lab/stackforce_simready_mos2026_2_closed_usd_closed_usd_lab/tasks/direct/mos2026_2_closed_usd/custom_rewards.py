@@ -4,6 +4,6 @@ import torch
 
 
 def compute_custom_reward_terms(env) -> dict[str, torch.Tensor]:
-    """Return additional unscaled reward terms for this closed-chain USD task."""
+    """返回此闭链 USD 任务的额外未缩放奖励项。"""
 
     return {"custom_reward": torch.zeros(env.num_envs, dtype=torch.float, device=env.device)}
