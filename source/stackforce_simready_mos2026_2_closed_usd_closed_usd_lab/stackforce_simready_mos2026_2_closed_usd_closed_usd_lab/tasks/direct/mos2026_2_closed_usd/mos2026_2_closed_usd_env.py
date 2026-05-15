@@ -353,9 +353,9 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
         return torch.square(left_energy - right_energy)
 
     def _compute_foot_slip(self) -> torch.Tensor:
-        # Slip penalty: while a foot is in contact (proxied by z-height
-        # near terrain origin), its world-frame xy velocity should be ≈ 0.
-        # Returns a per-env scalar = sum over feet of ||v_xy||² * contact_mask.
+        # 足端打滑惩罚：脚 body 着地时（用相对地形原点的 z 高度低于阈值近似），
+        # 它在世界坐标系下的 xy 速度应该 ≈ 0。
+        # 返回每个 env 的标量 = Σ_over_feet(||v_xy||² * contact_mask)。
         if not getattr(self, "_foot_body_ids", None):
             return torch.zeros(self.num_envs, device=self.device)
         foot_ids = self._foot_body_ids
@@ -368,8 +368,8 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
         threshold = float(getattr(self.cfg, "foot_contact_height_threshold", 0.06))
         contact_mask = (foot_height < threshold).float()  # (N, num_feet)
         foot_vel_xy_sq = torch.sum(torch.square(foot_lin_vel_w[..., :2]), dim=-1)  # (N, num_feet)
-        # Clamp before summing so a momentary PhysX glitch on one foot can't
-        # blow the reward up — capped at 25 m²/s² per foot (= |v|≤5 m/s).
+        # 求和前先 clamp，避免某个 env 单脚 PhysX 抽风产生一个巨大瞬时速度
+        # 把整批 reward 拉爆；25 m²/s² 对应 |v| ≤ 5 m/s，正常步态远小于这个值。
         foot_vel_xy_sq = torch.clamp(foot_vel_xy_sq, 0.0, 25.0)
         return torch.sum(foot_vel_xy_sq * contact_mask, dim=-1)
 
