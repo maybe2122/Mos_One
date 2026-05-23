@@ -83,29 +83,31 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
         )
 
     def _resolve_symmetry_joint_groups(self):
-        # 解析左右对称步态奖励要用的关节索引。两个列表必须等长，且按腿/类型
-        # 一一对应（hip/thigh/shank），这样 `left[i]` 和 `right[i]` 共享同样
-        # 的默认偏置，做差才有意义。
-        left_names = getattr(self.cfg, "left_leg_joint_names", None) or []
-        right_names = getattr(self.cfg, "right_leg_joint_names", None) or []
-        if not left_names or not right_names:
-            self._sym_left_ids: list[int] = []
-            self._sym_right_ids: list[int] = []
+        # 解析对角 trot 步态对称奖励要用的关节索引。两个列表必须等长，
+        # 且按"同关节类型 / 同身体位置"一一对应（详见 cfg 注释）：
+        # 同一 index 上的 diag1[i] 和 diag2[i] 在 trot 步态里应该反相位，
+        # 在 bound/pronk 步态里同相位 —— 这正是 `_compute_gait_symmetry`
+        # 用 `diag1_dev + diag2_dev` 做相位检测的前提。
+        diag1_names = getattr(self.cfg, "diag1_leg_joint_names", None) or []
+        diag2_names = getattr(self.cfg, "diag2_leg_joint_names", None) or []
+        if not diag1_names or not diag2_names:
+            self._sym_diag1_ids: list[int] = []
+            self._sym_diag2_ids: list[int] = []
             return
-        if len(left_names) != len(right_names):
+        if len(diag1_names) != len(diag2_names):
             raise RuntimeError(
-                "left_leg_joint_names and right_leg_joint_names must have "
-                f"equal length (got {len(left_names)} vs {len(right_names)})"
+                "diag1_leg_joint_names and diag2_leg_joint_names must have "
+                f"equal length (got {len(diag1_names)} vs {len(diag2_names)})"
             )
-        left_ids, _ = self._robot.find_joints(left_names, preserve_order=True)
-        right_ids, _ = self._robot.find_joints(right_names, preserve_order=True)
-        if len(left_ids) != len(left_names) or len(right_ids) != len(right_names):
+        diag1_ids, _ = self._robot.find_joints(diag1_names, preserve_order=True)
+        diag2_ids, _ = self._robot.find_joints(diag2_names, preserve_order=True)
+        if len(diag1_ids) != len(diag1_names) or len(diag2_ids) != len(diag2_names):
             raise RuntimeError(
                 "Failed to resolve all symmetry joints; "
-                f"left {left_names} -> {left_ids}; right {right_names} -> {right_ids}"
+                f"diag1 {diag1_names} -> {diag1_ids}; diag2 {diag2_names} -> {diag2_ids}"
             )
-        self._sym_left_ids = list(left_ids)
-        self._sym_right_ids = list(right_ids)
+        self._sym_diag1_ids = list(diag1_ids)
+        self._sym_diag2_ids = list(diag2_ids)
 
     def _capture_usd_default_joint_state(self):
         # Closed-chain USD assets often rely on authored passive joint coordinates.
@@ -331,26 +333,57 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
         return {"policy": obs}
 
     def _compute_gait_symmetry(self) -> torch.Tensor:
-        # 基于"幅度"的左右对称：比较左侧关节相对默认姿态偏离的平方和
-        # 与右侧的平方和。这种写法既能引导 policy 均匀使用两侧关节，
-        # 又允许走路时左右腿自然反相位交替——而瞬时左==右那种硬约束会
-        # 直接扼杀交替步态。
-        if not getattr(self, "_sym_left_ids", None) or not getattr(self, "_sym_right_ids", None):
+        # 对角 trot 对称：把同一关节类型在两条对角线上对侧的两个关节配成一对，
+        # 比较它们的偏差之和。**只对 thigh / shank 生效**，hip 故意排除——
+        # 详见 cfg 里 diag1/diag2 注释（hip 镜像轴 + 这个公式 = 会把"合理外撇"
+        # 错当成 bound 扣分，导致后腿被锁死贴默认值）。
+        #
+        # 配对规则（顺序由 cfg.diag1/diag2_leg_joint_names 决定）：
+        #   pair[0] = (fl_thigh,         fr_thigh)         — 前腿两侧 thigh
+        #   pair[1] = (rr_thigh,         rl_thigh)         — 后腿两侧 thigh
+        #   pair[2] = (fl_shank_link,    fr_shank_link_a)  — 前腿两侧 shank
+        #   pair[3] = (rr_shank_link_a,  rl_shank_link_a)  — 后腿两侧 shank
+        # 假设左右关节轴在 USD 里是镜像的（从 fl_thigh/fr_thigh 默认值同为 0
+        # 看不出来，但 hip 那对 0.06/0.06 同号已经间接验证了这套机器人是镜像
+        # 约定）。镜像 + trot 反相位 ⇒ pair 内 diag1[i] ≈ -diag2[i]，相加 ≈ 0；
+        # bound（前后对）/pronk（全同步）⇒ pair 内同号，相加 = 2×dev，
+        # 平方求和给出明确的非零惩罚——这正是旧版"左右幅度差"奖励抓不到的
+        # 失败模式（一跳一跳的步态满足 |left|² = |right|²，旧奖励给 0 惩罚）。
+        if not getattr(self, "_sym_diag1_ids", None) or not getattr(self, "_sym_diag2_ids", None):
             return torch.zeros(self.num_envs, device=self.device)
-        left_ids = self._sym_left_ids
-        right_ids = self._sym_right_ids
+        diag1_ids = self._sym_diag1_ids
+        diag2_ids = self._sym_diag2_ids
         joint_pos = self._robot.data.joint_pos
         default_pos = self._robot.data.default_joint_pos
         joint_pos = torch.nan_to_num(joint_pos, nan=0.0, posinf=0.0, neginf=0.0)
-        left_dev = joint_pos[:, left_ids] - default_pos[:, left_ids]
-        right_dev = joint_pos[:, right_ids] - default_pos[:, right_ids]
-        left_energy = torch.sum(torch.square(left_dev), dim=1)
-        right_energy = torch.sum(torch.square(right_dev), dim=1)
-        # 每侧能量都 clamp 一下，避免某个 env 物理炸掉时这一项独自把整个
-        # batch 的 reward 拉爆。
-        left_energy = torch.clamp(left_energy, 0.0, 25.0)
-        right_energy = torch.clamp(right_energy, 0.0, 25.0)
-        return torch.square(left_energy - right_energy)
+        diag1_dev = joint_pos[:, diag1_ids] - default_pos[:, diag1_ids]
+        diag2_dev = joint_pos[:, diag2_ids] - default_pos[:, diag2_ids]
+        paired_sum = diag1_dev + diag2_dev
+        phase_violation = torch.sum(torch.square(paired_sum), dim=1)
+        # clamp 用来挡 PhysX 抽风：4 个 pair × (2×1.5)² ≈ 36 是动作裁剪边界下
+        # 的理论上限，正常 trot 时这一项 ≪ 1；25 取接近上限作为爆炸保护。
+        return torch.clamp(phase_violation, 0.0, 25.0)
+
+    def _compute_anti_bound(self) -> torch.Tensor:
+        # 惩罚"同端两条腿同步抬落地"的步态（bound/pronk 的物理特征）。
+        # gait_symmetry 是关节空间的静态姿态对称；这一项是脚的动态速度同步——
+        # bound 时前左+前右脚一起向上、一起向下，v_z 同号；trot 时一只腿
+        # 抬另一只腿落，v_z 互相抵消。两个项互补，一起锁死跳跃步态。
+        #
+        # foot_body_ids 顺序由 cfg.foot_body_names_expr 决定，目前是
+        # [FL, FR, RL, RR]——如果以后改这个列表的顺序，下面的 pair 切片
+        # 也要同步改。
+        if not getattr(self, "_foot_body_ids", None) or len(self._foot_body_ids) < 4:
+            return torch.zeros(self.num_envs, device=self.device)
+        foot_ids = self._foot_body_ids
+        foot_vel_z = self._robot.data.body_lin_vel_w[:, foot_ids, 2]  # (N, 4)
+        foot_vel_z = torch.nan_to_num(foot_vel_z, nan=0.0, posinf=0.0, neginf=0.0)
+        # 单脚 |v_z| 正常步态下 < 1.5 m/s。clamp 单脚速度避免某脚 PhysX 抽风
+        # 把整批 reward 拉爆，再做 pair 求和。
+        foot_vel_z = torch.clamp(foot_vel_z, -5.0, 5.0)
+        front_pair_sync = torch.square(foot_vel_z[:, 0] + foot_vel_z[:, 1])  # FL + FR
+        rear_pair_sync = torch.square(foot_vel_z[:, 2] + foot_vel_z[:, 3])   # RL + RR
+        return torch.clamp(front_pair_sync + rear_pair_sync, 0.0, 100.0)
 
     def _compute_foot_slip(self) -> torch.Tensor:
         # 足端打滑惩罚：脚 body 着地时（用相对地形原点的 z 高度低于阈值近似），
@@ -415,6 +448,7 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
         action_rate = torch.sum(torch.square(self._actions - self._previous_actions), dim=1)
         foot_slip = self._compute_foot_slip()
         gait_symmetry = self._compute_gait_symmetry()
+        anti_bound = self._compute_anti_bound()
         # Constant forward locomotion command. Without a tracking term the
         # policy converges to the "stand still" optimum allowed by the other
         # shaping terms, so add explicit xy/yaw tracking rewards.
@@ -436,6 +470,7 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
             "action_rate": action_rate * scales.get("action_rate", 0.0),
             "foot_slip": foot_slip * scales.get("foot_slip", 0.0),
             "gait_symmetry": gait_symmetry * scales.get("gait_symmetry", 0.0),
+            "anti_bound": anti_bound * scales.get("anti_bound", 0.0),
             "track_lin_vel_xy": torch.exp(-lin_vel_xy_err / tracking_sigma) * scales.get("track_lin_vel_xy", 0.0),
             "track_ang_vel_z": torch.exp(-ang_vel_yaw_err / tracking_sigma) * scales.get("track_ang_vel_z", 0.0),
         }

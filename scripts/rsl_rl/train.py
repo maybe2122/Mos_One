@@ -8,17 +8,17 @@ from datetime import datetime
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Train a StackForce closed-chain USD task with RSL-RL.")
-parser.add_argument("--num_envs", type=int, default=None)
-parser.add_argument("--task", type=str, default=None)
+parser.add_argument("--num_envs", type=int, default=4096)
+parser.add_argument("--task", type=str, default="StackForce-Mos20262ClosedUsd-ClosedUsd-v0")
 parser.add_argument("--agent", type=str, default="rsl_rl_cfg_entry_point")
 parser.add_argument("--seed", type=int, default=None)
-parser.add_argument("--max_iterations", type=int, default=None)
+parser.add_argument("--max_iterations", type=int, default=5000)
 parser.add_argument("--run_name", type=str, default=None)
 parser.add_argument("--checkpoint", type=str, default=None)
 parser.add_argument(
     "--terrain",
     type=str,
-    default="curriculum",
+    default="flat",
     choices=["flat", "rough", "curriculum"],
     help=(
         "Ground terrain: 'flat' (plane, default), 'rough' (procedural heightfield), "

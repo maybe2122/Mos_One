@@ -213,7 +213,15 @@ class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
             pos=(0.0, 0.0, 0.35),
             rot=(1, 0, 0, 0),
             joint_pos={
-                "fl_hip": 0.06, "fr_hip": 0.06, "rl_hip": -0.06, "rr_hip": -0.06,
+                # 后髋从 ±0.06 改成 ±0.15：训完观察到后两脚靠太近，原因是
+                # 默认值本身就把后腿往内收（小幅度），加上 gait_symmetry 把
+                # hip 锁死在默认值附近，policy 没机会把后腿撑开。
+                # 这里把后髋绝对值放大到 0.15（≈ 8.6°），跟前髋一起在站姿里
+                # 提供明显的外撇，让后脚有合理的横向间距。
+                # 注意：rear hip 沿用原来的负号——如果发现这个改动反而让后脚
+                # 更靠近（说明 USD 里 rear hip 轴的方向跟假设相反），把这两行
+                # 的符号翻成正的就行。
+                "fl_hip": 0.15, "fr_hip": 0.15, "rl_hip": -0.15, "rr_hip": -0.15,
                 "fl_thigh": 0.0, "fr_thigh": 0.0, "rl_thigh": 0.0, "rr_thigh": 0.0,
                 # FL 腿的 "shank_link_a" 在 USD 中命名为 `fl_shank_link`（无 _a 后缀）；
                 # 其余三条腿使用 `*_shank_link_a` 命名约定。
@@ -230,8 +238,17 @@ class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
                 ],
                 stiffness=25.0,
                 damping=0.5,
-                effort_limit_sim=30.0,
-                velocity_limit_sim=30.0,
+                # GO-M8010-6 电机：最大扭矩 23.7 N·m，最大转速 30 rad/s（24V 供电）。
+                # 训练阶段限制（分两段，便于课程式逐步放开）：
+                #   初期（站立 / walking / trot / 基础 locomotion）——当前值
+                #       effort  ≈ 10–12 N·m，velocity ≈ 10–15 rad/s
+                #       策略更稳，不抽搐，sim-to-real 友好。
+                #   后期（dynamic gait / 小跳跃 / recovery，待策略稳定后再放开）
+                #       effort  ≈ 14–16 N·m，velocity ≈ 18–22 rad/s
+                # 真实电机峰值（23.7 N·m / 30 rad/s）不建议在仿真里直接贴满，
+                # 不然策略会学到一直贴峰值的动作，真机上跑不出来。
+                effort_limit_sim=12.0,
+                velocity_limit_sim=15.0,
             ),
         },
         soft_joint_pos_limit_factor=0.95,
@@ -260,21 +277,30 @@ class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
     # 才会参与 foot_slip 惩罚的统计。
     # 站立状态下本机器人小腿 body 中心大约离地 3-5 cm，所以 0.07 m 留一点余量。
     foot_contact_height_threshold = 0.07
-    # 左右对称步态奖励用到的左/右两侧关节分组。
-    # 惩罚的是两侧"偏离默认姿态的能量"之差（看大小不看符号），
-    # 所以左腿向前迈、右腿向后摆这种正常交替步态不会被惩罚，
-    # 只有"瘸腿/重心偏一侧"这种真正的不对称才会被扣分。
-    # 两个列表的顺序要按腿/类型一一对应（hip/thigh/shank），
-    # 这样配对的关节默认偏置相同，差值才有意义。
-    left_leg_joint_names = [
-        "fl_hip", "rl_hip",
-        "fl_thigh", "rl_thigh",
-        "fl_shank_link", "rl_shank_link_a",
+    # 对角线 trot 步态对称奖励用到的两条对角线分组。
+    # 旧的"左侧 vs 右侧"分组（fl+rl vs fr+rr）有个致命问题：bound 和 pronk
+    # 这两种"跳着走"的步态左右两边能量是相等的，奖励给 0 惩罚 → policy 学到
+    # 一跳一跳的步态。现在改成对角对：
+    #   diag1 = FL + RR（前左 + 后右）
+    #   diag2 = FR + RL（前右 + 后左）
+    # 两个列表必须严格按"同关节类型 / 同身体位置"对齐（详见 reward 公式注释）：
+    #   index 0,1 -> 各腿的 thigh；index 2,3 -> 各腿的 shank
+    # 每个 index 上的 diag1[i] 和 diag2[i] 配成一对"同类型、对角线上对侧"的关节。
+    # trot 时这两个关节反相位（一前一后），偏差相加≈0；bound/pronk 时同相位
+    # （一起前/一起后），偏差相加≠0 → 触发惩罚。详见 env._compute_gait_symmetry。
+    #
+    # hip 关节故意不放进来：hip 管的是横向外摆，trot 里基本不参与相位，
+    # 但因为左右 hip 轴是镜像的，"对称外撇"（合理站姿）刚好满足"两侧偏差同号"，
+    # 会被这个公式当成 bound 来扣分——结果就是把 hip 锁死在默认值，后腿撑不开。
+    # 所以这里只对真正驱动 trot 相位的 thigh / shank 用对角相位奖励，
+    # hip 的对称由 init_state 默认值 + 物理动力学自然约束。
+    diag1_leg_joint_names = [
+        "fl_thigh", "rr_thigh",
+        "fl_shank_link", "rr_shank_link_a",
     ]
-    right_leg_joint_names = [
-        "fr_hip", "rr_hip",
-        "fr_thigh", "rr_thigh",
-        "fr_shank_link_a", "rr_shank_link_a",
+    diag2_leg_joint_names = [
+        "fr_thigh", "rl_thigh",
+        "fr_shank_link_a", "rl_shank_link_a",
     ]
     # 闭环约束关节（每条腿用来"闭合"四连杆平行机构的那根 PhysX 关节）。
     # 这 4 个关节在 USD 里标了 `physics:excludeFromArticulation=True`，
@@ -327,7 +353,10 @@ class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
     #     既保留惩罚作用又不会主导整个 reward 预算。
     #   - `lin_vel_z` 之前 -0.5、lin_vel_z² 上限 100 → 单步最多 -50，
     #     完全盖过了 +4 的跟踪奖励，这是之前 reward 卡在 500-1100 的主因。
-    #     现在 -0.05 + 上限 100 → 单步最多 -5，恰好。
+    #     现在抬到 -0.5（上限 100 → 单步最多 -50），用来配合下面新的对角对称
+    #     奖励一起压制"跳着走"。正常 trot 时 z 速度 ≈ 0，lin_vel_z² ≪ 1 几乎
+    #     没代价；跳跃步态瞬时 |v_z| ≈ 1 m/s 时单步 -0.5，刚好抵消 track 奖励
+    #     的收益。如果发现训练初期被这一项压得不敢动，再调到 -0.2 看看。
     #   - `track_lin_vel_xy` 从 4.0 提到 6.0，让"往前走"明显比"站住"赚得多。
     #   - joint_vel / action_rate / ang_vel_xy 的惩罚都保持很小，
     #     这样 PPO 在探索时还能自由地抖动腿。
@@ -336,7 +365,7 @@ class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
         "upright": 0.0,
         "flat_orientation": -2.5,
         "base_height": -3.0,
-        "lin_vel_z": -0.05,
+        "lin_vel_z": -0.5,
         "ang_vel_xy": -0.02,
         "joint_vel": -0.0001,
         "action_rate": -0.005,
@@ -348,12 +377,21 @@ class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
         # -0.1 这个权重保证打滑代价能盖过 track_lin_vel_xy 拿到的收益
         # （≈ 6 * exp(-err)）：一只脚以 1 m/s 滑动时 vel² = 1，对应单步单脚 -0.1。
         "foot_slip": -0.1,
-        # 左右对称步态奖励：基于"幅度"的版本，不会强求瞬时左==右
-        # （那样会扼杀交替步态）。这里惩罚的是左侧关节偏离默认姿态的总能量
-        # 和右侧总能量之差的平方，引导 policy 用对称的姿态去走路，
-        # 而不是瘸腿/重心偏一侧。权重故意压得小，对应 doc/足端打滑问题.md
-        # 里说的"修饰项"定位。
-        "gait_symmetry": -0.05,
+        # 对角 trot 步态对称奖励：惩罚"对角两腿同相位"的程度
+        # （详见 env._compute_gait_symmetry 与 diag1/diag2 配置注释）。
+        # trot 时 paired_sum ≈ 0 拿满分；bound/pronk 这种"跳着走"会被狠扣。
+        # 权重从旧版（左右幅度差）的 -0.05 抬到 -0.5：旧版几乎不起作用
+        # （bound/pronk 都满足左右幅度相等），所以权重小没问题；新版会真的
+        # 把"跳着走"扣分扣到底，权重大一点让对角对称真正参与塑形。
+        "gait_symmetry": -0.5,
+        # 同端两脚同步抬落地的惩罚（bound/pronk 的直接物理特征）。
+        # gait_symmetry 是关节空间静态姿态对称；anti_bound 是脚的 z 速度
+        # 动态同步检测——前左+前右脚一起向上/向下时触发，后对同理。
+        # 单脚 |v_z| 上限 5 m/s，pair 求和后单步最坏 (2*5)² *2 = 200，
+        # clamp 到 100；正常 trot 时这一项 ≪ 1 几乎没代价。
+        # 用 -1.0 比 gait_symmetry 还重，因为这是用户明确点名要"增大"的项：
+        # 它直接看脚的运动相位，比关节空间对称项更难被"用别的关节代偿"绕过。
+        "anti_bound": -1.0,
         "custom_reward": 0.0,
     }
     # 速度跟踪奖励里 exp() 的带宽。带宽越大，部分达成（比如指令 1.0 m/s
