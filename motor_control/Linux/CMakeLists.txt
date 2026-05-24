@@ -15,4 +15,8 @@ target_link_libraries(motorctrl libUnitreeMotorSDK_M80106_Linux64.so)
 add_executable(stop example/stop.cpp)
 target_link_libraries(stop libUnitreeMotorSDK_M80106_Linux64.so)
 
+#example: 可传参的驱动 / 停止工具，供 GUI 使用
+add_executable(motor_ctrl example/motor_ctrl.cpp)
+target_link_libraries(motor_ctrl libUnitreeMotorSDK_M80106_Linux64.so)
+
 

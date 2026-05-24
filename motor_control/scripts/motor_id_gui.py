@@ -14,14 +14,15 @@ import subprocess
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
+from tkinter import font as tkfont
 
 # SDK 所在目录（GO-M8010-6 SDK 解压目录）。
-# 可用环境变量 UNITREE_MOTOR_SDK 覆盖。
-SDK_ROOT = os.environ.get(
-    "UNITREE_MOTOR_SDK",
-    "/media/maybe/新加卷/Diy/GO-M8010-6电机使用教程/Linux平台教程/"
-    "Linux平台电机使用例程(包含SDK)",
+# 默认使用仓库内 SDK：脚本在 motor_control/scripts/，SDK 在 motor_control/Linux/。
+# 通过脚本自身位置推导，迁移仓库后仍可用。可用环境变量 UNITREE_MOTOR_SDK 覆盖。
+_DEFAULT_SDK_ROOT = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Linux")
 )
+SDK_ROOT = os.environ.get("UNITREE_MOTOR_SDK", _DEFAULT_SDK_ROOT)
 TOOL_DIR = os.path.join(
     SDK_ROOT, "motor_tools", "Unitree_MotorTools_v0.2.0_x86_64_Linux"
 )
@@ -30,6 +31,32 @@ MOTOR_CTRL = os.path.join(BUILD_DIR, "motor_ctrl")
 
 SUDO_PASSWORD = "1"
 DEFAULT_SPEED = 6.28 * 6.33  # 与 example/main.cpp 一致
+
+
+def pick_mono_font(size=10):
+    """选择一个支持中文的等宽字体。
+
+    输出框原先硬编码 ("Monospace", 10)，在多数 Linux 上会被解析成
+    DejaVu Sans Mono —— 它不含中文字形，导致日志里的中文显示成方块（豆腐块）。
+    这里优先挑选既等宽又含 CJK 的字体；都没有时回退到 TkFixedFont（至少 ASCII 正常）。
+    需在 Tk root 创建后调用（依赖 tkfont.families()）。
+    """
+    preferred = (
+        "Noto Sans Mono CJK SC",
+        "Noto Sans Mono CJK TC",
+        "Sarasa Mono SC",
+        "Source Han Mono SC",
+        "WenQuanYi Micro Hei Mono",
+        "WenQuanYi Zen Hei Mono",
+    )
+    try:
+        available = set(tkfont.families())
+    except tk.TclError:
+        return ("TkFixedFont", size)
+    for fam in preferred:
+        if fam in available:
+            return (fam, size)
+    return ("TkFixedFont", size)
 
 
 def list_serial_ports():
@@ -47,7 +74,6 @@ class MotorIdApp:
     def __init__(self, root):
         self.root = root
         root.title("GO-M8010-6 电机 ID 管理")
-        root.geometry("760x560")
 
         self.running = False
         self.need_sudo = os.geteuid() != 0
@@ -57,8 +83,26 @@ class MotorIdApp:
 
         self._build_ui()
         self._check_tools()
+        self._place_window()
 
         root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _place_window(self):
+        """按内容自适应窗口大小，并放到可见位置。
+
+        原先硬编码 geometry("760x560") 偏小，下方的提示文字、输出框、状态栏
+        会被挤出可视区域；在多显示器环境下窗口管理器有时还会把窗口丢到副屏
+        （x 偏移很大），看起来就像“界面打不开”。这里改为按控件需求计算尺寸，
+        并固定放到最左侧显示器的左上角(40,40)，确保始终可见。
+        """
+        r = self.root
+        r.update_idletasks()
+        w = max(r.winfo_reqwidth(), 760)
+        h = max(r.winfo_reqheight(), 560)
+        # 不超过当前屏幕高度，给任务栏/标题栏留余量
+        h = min(h, r.winfo_screenheight() - 80)
+        r.minsize(680, 560)
+        r.geometry(f"{w}x{h}+40+40")
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
@@ -166,6 +210,46 @@ class MotorIdApp:
         )
         self.btn_stop.grid(row=1, column=2, columnspan=2, sticky="w", **pad)
 
+        # 角度读取（read：只读不驱动电机）
+        self.btn_read_one = ttk.Button(
+            ctrl, text="读取选中ID角度", command=self.on_read_one, width=14
+        )
+        self.btn_read_one.grid(row=2, column=0, columnspan=2, sticky="w", **pad)
+
+        self.btn_read_all = ttk.Button(
+            ctrl, text="📐 读取所有角度", command=self.on_read_all, width=14
+        )
+        self.btn_read_all.grid(row=2, column=2, columnspan=2, sticky="w", **pad)
+
+        # ---- 角度读取结果 ----
+        angle = ttk.LabelFrame(self.root, text="电机角度（read 读取，不驱动电机）")
+        angle.pack(fill="x", **pad)
+        cols = ("id", "joint_rad", "joint_deg", "rotor_rad", "temp", "err")
+        headings = {
+            "id": "ID",
+            "joint_rad": "关节(rad)",
+            "joint_deg": "关节(°)",
+            "rotor_rad": "转子(rad)",
+            "temp": "温度℃",
+            "err": "错误码",
+        }
+        widths = {
+            "id": 50, "joint_rad": 110, "joint_deg": 100,
+            "rotor_rad": 110, "temp": 70, "err": 70,
+        }
+        self.angle_tree = ttk.Treeview(
+            angle, columns=cols, show="headings", height=6
+        )
+        for c in cols:
+            self.angle_tree.heading(c, text=headings[c])
+            self.angle_tree.column(c, width=widths[c], anchor="center")
+        ascroll = ttk.Scrollbar(
+            angle, orient="vertical", command=self.angle_tree.yview
+        )
+        self.angle_tree.configure(yscrollcommand=ascroll.set)
+        self.angle_tree.pack(side="left", fill="x", expand=True)
+        ascroll.pack(side="right", fill="y")
+
         # 提示
         tip = (
             "提示：查看 / 修改 ID 会让电机进入工厂模式（背部绿灯每秒快闪 3 次）。\n"
@@ -179,7 +263,7 @@ class MotorIdApp:
         # 输出
         out = ttk.LabelFrame(self.root, text="输出")
         out.pack(fill="both", expand=True, **pad)
-        self.output = scrolledtext.ScrolledText(out, height=14, font=("Monospace", 10))
+        self.output = scrolledtext.ScrolledText(out, height=14, font=pick_mono_font(10))
         self.output.pack(fill="both", expand=True)
 
         # 状态栏 + 取消按钮
@@ -286,6 +370,7 @@ class MotorIdApp:
         for b in (
             self.btn_view, self.btn_change, self.btn_motor, self.btn_drive,
             self.btn_view_all, self.btn_motor_all,
+            self.btn_read_one, self.btn_read_all,
         ):
             b.config(state="disabled")
         self.btn_cancel.config(state="normal")
@@ -424,7 +509,8 @@ class MotorIdApp:
         self.status_var.set(f"驱动中: id={mid} speed={speed}")
 
         # 锁定其他动作按钮，仅保留「停止」可用
-        for b in (self.btn_view, self.btn_change, self.btn_motor, self.btn_drive):
+        for b in (self.btn_view, self.btn_change, self.btn_motor, self.btn_drive,
+                  self.btn_read_one, self.btn_read_all):
             b.config(state="disabled")
         self.btn_stop.config(state="normal")
 
@@ -468,7 +554,8 @@ class MotorIdApp:
     def _drive_finished(self):
         self.drive_proc = None
         self.btn_stop.config(state="disabled")
-        for b in (self.btn_view, self.btn_change, self.btn_motor, self.btn_drive):
+        for b in (self.btn_view, self.btn_change, self.btn_motor, self.btn_drive,
+                  self.btn_read_one, self.btn_read_all):
             b.config(state="normal")
         self.status_var.set("驱动已停止")
 
@@ -525,6 +612,148 @@ class MotorIdApp:
                 self.root.after(0, self._drive_finished)
 
         threading.Thread(target=_send_stop, daemon=True).start()
+
+    # -- 角度读取 ------------------------------------------------------
+    def on_read_one(self):
+        mid = self._validate_drive_id()
+        if mid is None:
+            return
+        self._start_read(mid, title=f"读取角度 id={mid}")
+
+    def on_read_all(self):
+        self._start_read("all", title="读取所有角度")
+
+    def _start_read(self, target, title):
+        if self.drive_proc is not None:
+            messagebox.showinfo("提示", "电机正在驱动中，请先停止再读取。")
+            return
+        if self.running:
+            messagebox.showinfo("忙", "请等待当前命令完成")
+            return
+        if not os.path.isfile(MOTOR_CTRL):
+            messagebox.showerror("缺少 motor_ctrl", f"未找到 {MOTOR_CTRL}")
+            return
+
+        cmd = [MOTOR_CTRL, self.port_var.get(), str(target), "read"]
+        if self.need_sudo:
+            full_cmd = ["sudo", "-S", "-p", ""] + cmd
+        else:
+            full_cmd = cmd
+
+        self._log("\n" + "=" * 60)
+        shown = ["sudo"] + cmd if self.need_sudo else cmd
+        self._log(f"[{title}]  $ {' '.join(shown)}")
+        self.status_var.set(f"{title} ...")
+
+        self.running = True
+        self.cancel_requested.clear()
+        for b in (
+            self.btn_view, self.btn_change, self.btn_motor, self.btn_drive,
+            self.btn_view_all, self.btn_motor_all,
+            self.btn_read_one, self.btn_read_all,
+        ):
+            b.config(state="disabled")
+        self.btn_cancel.config(state="normal")
+
+        threading.Thread(
+            target=self._read_worker, args=(full_cmd, title), daemon=True
+        ).start()
+
+    def _read_worker(self, full_cmd, title):
+        rows = []
+        try:
+            proc = subprocess.Popen(
+                full_cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            self.cmd_proc = proc
+            if self.need_sudo:
+                try:
+                    proc.stdin.write(SUDO_PASSWORD + "\n")
+                    proc.stdin.flush()
+                except (BrokenPipeError, OSError):
+                    pass
+            try:
+                proc.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
+
+            for line in proc.stdout:
+                line = line.rstrip("\n")
+                self.root.after(0, self._log, line)
+                row = self._parse_angle_line(line)
+                if row is not None:
+                    rows.append(row)
+            proc.wait()
+            self.cmd_proc = None
+            self.root.after(0, self._log, f"[退出码 {proc.returncode}]")
+            self.root.after(0, self._update_angle_table, rows)
+        except FileNotFoundError as e:
+            self.root.after(0, self._log, f"[错误] {e}")
+        finally:
+            self.root.after(0, self._done, title)
+
+    def _parse_angle_line(self, line):
+        # 解析 motor_ctrl 的 read 输出：
+        #   ANGLE id=0 ok=1 rotor=1.234 joint=0.195 deg=11.17 temp=30 err=0
+        #   ANGLE id=1 ok=0
+        m = re.match(r"\s*ANGLE\s+id=(\d+)\s+ok=([01])(.*)", line)
+        if not m:
+            return None
+        mid = int(m.group(1))
+        ok = m.group(2) == "1"
+        rest = m.group(3)
+
+        def grab(key):
+            mm = re.search(rf"{key}=(-?\d+(?:\.\d+)?)", rest)
+            return mm.group(1) if mm else ""
+
+        if ok:
+            return {
+                "id": mid, "ok": True,
+                "rotor": grab("rotor"), "joint": grab("joint"),
+                "deg": grab("deg"), "temp": grab("temp"), "err": grab("err"),
+            }
+        return {"id": mid, "ok": False}
+
+    def _update_angle_table(self, rows):
+        # 只显示有响应(ok=1)的电机，并把检测到的 ID 同步到下拉框。
+        for item in self.angle_tree.get_children():
+            self.angle_tree.delete(item)
+
+        def fmt(v, nd):
+            try:
+                return f"{float(v):.{nd}f}"
+            except (TypeError, ValueError):
+                return "—"
+
+        responders = []
+        for r in rows:
+            if not r.get("ok"):
+                continue
+            responders.append(r["id"])
+            self.angle_tree.insert(
+                "", "end",
+                values=(
+                    r["id"], fmt(r["joint"], 4), fmt(r["deg"], 2),
+                    fmt(r["rotor"], 4),
+                    r.get("temp") or "—", r.get("err") or "—",
+                ),
+            )
+
+        if responders:
+            self._update_detected_ids(responders)
+            self._log(f"==> 响应电机 ID: {', '.join(map(str, responders))}（角度见上方表格）")
+            self.status_var.set(
+                f"读取完成，响应电机 ID: {', '.join(map(str, responders))}"
+            )
+        else:
+            self._log("==> 无电机响应（确认已处于电机模式且接线正常）")
+            self.status_var.set("读取完成：无电机响应（确认已处于电机模式且接线正常）")
 
     def _on_close(self):
         if self.drive_proc is not None and self.drive_proc.poll() is None:
@@ -584,6 +813,7 @@ class MotorIdApp:
         for b in (
             self.btn_view, self.btn_change, self.btn_motor, self.btn_drive,
             self.btn_view_all, self.btn_motor_all,
+            self.btn_read_one, self.btn_read_all,
         ):
             b.config(state="disabled")
         self.btn_cancel.config(state="normal")
@@ -666,6 +896,7 @@ class MotorIdApp:
         for b in (
             self.btn_view, self.btn_change, self.btn_motor, self.btn_drive,
             self.btn_view_all, self.btn_motor_all,
+            self.btn_read_one, self.btn_read_all,
         ):
             b.config(state="normal")
         self.btn_cancel.config(state="disabled")

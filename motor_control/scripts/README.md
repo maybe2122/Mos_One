@@ -1,8 +1,22 @@
-# motor_id_gui.py — GO-M8010-6 电机 ID 管理与驱动测试 GUI
+# GO-M8010-6 电机 ID 管理与驱动测试
 
-Tkinter 图形界面，封装宇树 GO-M8010-6 电机随附工具（`swboot` / `changeid` /
-`swmotor`）和一个基于官方 SDK 的可传参驱动小工具 `motor_ctrl`，方便在 4 路 USB‑RS485
-模块上批量查看 / 修改电机 ID，以及做单电机驱动 / 停止测试。
+封装宇树 GO-M8010-6 电机随附工具（`swboot` / `changeid` / `swmotor`）和一个基于官方
+SDK 的可传参驱动 / 读取小工具 `motor_ctrl`，方便在 4 路 USB‑RS485 模块上批量查看 /
+修改电机 ID、做单电机驱动 / 停止测试，以及读取所有电机当前角度。
+
+两个等价前端，功能一致，按需选用：
+
+| 前端 | 文件 | 启动 | 说明 |
+|------|------|------|------|
+| **网页版（推荐）** | `motor_web.py` | `python3 scripts/motor_web.py` 后浏览器开 `http://127.0.0.1:8000` | 纯标准库无依赖；浏览器渲染中文，无 Tk 字体方块问题；默认只监听本机 |
+| Tkinter 版 | `motor_id_gui.py` | `python3 scripts/motor_id_gui.py` | 需 `python3-tk`；部分 Linux 中文显示为方块 |
+
+> 网页版默认仅监听 `127.0.0.1`。如需在另一台机器的浏览器访问：
+> `HOST=0.0.0.0 PORT=8000 python3 scripts/motor_web.py`（注意这会把电机控制暴露到局域网）。
+
+以下文档以 Tkinter 版为主，网页版操作区块、底层命令、`sudo` 密码策略与其完全一致。
+
+## motor_id_gui.py（Tkinter 版）
 
 ## 功能一览
 
@@ -15,6 +29,7 @@ Tkinter 图形界面，封装宇树 GO-M8010-6 电机随附工具（`swboot` / `
 |            | 切回电机模式               | `swmotor <port>`                                  |
 |            | 切回全部 `ttyUSB*`         | 依次对每路跑 `swmotor`                            |
 | 电机控制   | 驱动转动 / 停止            | `motor_ctrl <port> <id> drive|stop ...`           |
+|            | 读取所有 / 单个电机角度    | `motor_ctrl <port> <id|all> read`                 |
 | 状态栏     | 取消当前命令               | 向当前子进程发 SIGTERM / SIGKILL                  |
 
 - 扫描会自动把检测到的 ID 填进「原 ID」「驱动电机 ID」下拉框。
@@ -49,10 +64,14 @@ make motor_ctrl
 ```
 motor_ctrl <port> <id> drive [speed_rad_s] [duration_ms]
 motor_ctrl <port> <id> stop  [duration_ms]
+motor_ctrl <port> <id|all> read
 ```
 
 - `duration_ms = 0`：永远循环，直到被外部 SIGTERM
 - 收到 SIGTERM/SIGINT 时，若处于 drive 模式会自动补发 200 ms 的停止脉冲
+- `read`：只发零力矩指令读取当前状态，**不驱动电机**；`all` 遍历 ID 0~14。
+  每个响应电机打印一行 `ANGLE id=.. ok=1 rotor=.. joint=.. deg=.. temp=.. err=..`，
+  其中 `joint = rotor / 6.33`（减速比），即输出轴（关节）角度。
 
 ## 路径配置
 
@@ -137,7 +156,8 @@ EOF
 
 ```
 scripts/
-├── motor_id_gui.py     # 本 GUI 主程序（含明文 sudo 密码，权限 700）
+├── motor_web.py        # 网页版前端 + 服务（纯标准库，推荐）
+├── motor_id_gui.py     # Tkinter 版 GUI（含明文 sudo 密码，权限 700）
 └── README.md           # 本文档
 ```
 
