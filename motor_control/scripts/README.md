@@ -14,6 +14,25 @@ SDK 的可传参驱动 / 读取小工具 `motor_ctrl`，方便在 4 路 USB‑RS
 > 网页版默认仅监听 `127.0.0.1`。如需在另一台机器的浏览器访问：
 > `HOST=0.0.0.0 PORT=8000 python3 scripts/motor_web.py`（注意这会把电机控制暴露到局域网）。
 
+### robot_web.py —— 四足机器人操控（站立）
+
+仿手柄的整机操控面板，本期实现「站立」动作：① 趴姿标定 → ② 站姿标定（手扶撑起）→
+③ 计算各关节趴→站转动量并存 `config/stand_config.json` → 站立时先安全校验当前角是否贴近
+配置趴姿，通过后按关节限速（默认 ≤0.1 rad/s）缓慢起身。底层复用 `motor_ctrl`
+（`read` 读角；新增 `servo` 流式位置伺服，插值在 Python 端算）。设计细节见
+`motor_control/doc/四足站立控制设计.md`。
+
+```bash
+python3 scripts/robot_web.py   # 浏览器开 http://127.0.0.1:8000
+```
+
+接线映射（已确认，可在 `config/joint_map.default.json` 改）：usb0=ID 1/2/3(FL)、
+usb1=4/5/6(FR)、usb2=7/8/9(RL)、usb3=10/11/12(RR)，腿内顺序 hip/thigh/shank。
+
+> 说明：电机为**单圈绝对值编码器**，绝对位置断电不变，**标定一次即可跨上电使用**；仅在
+> 机械改动 / 重新装配 / 换电机 / 改 ID 后才需重新标定。站立前的安全校验（当前角是否贴近
+> 配置趴姿）仍会执行，作为"确实趴好了"的安全门槛。
+
 以下文档以 Tkinter 版为主，网页版操作区块、底层命令、`sudo` 密码策略与其完全一致。
 
 ## motor_id_gui.py（Tkinter 版）

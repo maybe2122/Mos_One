@@ -1,0 +1,27 @@
+{
+  "robot": "mos2026_2",
+  "gear_ratio": 6.33,
+  "_comment": "关节 -> (串口, 电机ID) 默认映射。已确认接线：每腿一路总线，电机ID全局唯一1~12。标定时按此模板生成 stand_config.json，ID 可在页面调整。",
+  "joints": [
+    { "name": "fl_hip",   "port": "/dev/ttyUSB0", "id": 1 },
+    { "name": "fl_thigh", "port": "/dev/ttyUSB0", "id": 2 },
+    { "name": "fl_shank", "port": "/dev/ttyUSB0", "id": 3 },
+    { "name": "fr_hip",   "port": "/dev/ttyUSB1", "id": 4 },
+    { "name": "fr_thigh", "port": "/dev/ttyUSB1", "id": 5 },
+    { "name": "fr_shank", "port": "/dev/ttyUSB1", "id": 6 },
+    { "name": "rl_hip",   "port": "/dev/ttyUSB2", "id": 7 },
+    { "name": "rl_thigh", "port": "/dev/ttyUSB2", "id": 8 },
+    { "name": "rl_shank", "port": "/dev/ttyUSB2", "id": 9 },
+    { "name": "rr_hip",   "port": "/dev/ttyUSB3", "id": 10 },
+    { "name": "rr_thigh", "port": "/dev/ttyUSB3", "id": 11 },
+    { "name": "rr_shank", "port": "/dev/ttyUSB3", "id": 12 }
+  ],
+  "execute": {
+    "verify_threshold_rad": 0.20,
+    "max_joint_vel_rad_s": 0.1,
+    "min_duration_s": 1.0,
+    "rate_hz": 100,
+    "k_p": 8.0,
+    "k_w": 0.8
+  }
+}

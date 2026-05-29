@@ -19,10 +19,12 @@ tkinter 版 (motor_id_gui.py) 在部分 Linux 上中文字体会显示成方块�
 """
 
 import json
+import math
 import os
 import re
 import subprocess
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -41,18 +43,42 @@ CHANGEID = os.path.join(TOOL_DIR, "changeid")
 SWMOTOR = os.path.join(TOOL_DIR, "swmotor")
 
 SUDO_PASSWORD = "1"
-DEFAULT_SPEED = 6.28 * 6.33
+DEFAULT_SPEED = 0.1
 NEED_SUDO = os.geteuid() != 0
 MAX_LOG = 4000  # 日志缓冲最多保留的行数
+
+# --- 姿态标定 / 配置文件 ---
+CONFIG_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config")
+)
+JOINT_MAP_PATH = os.path.join(CONFIG_DIR, "joint_map.default.json")
+STAND_CONFIG_PATH = os.path.join(CONFIG_DIR, "stand_config.json")
+# 判定转动方向的死区：关节角变化小于此值(rad)视为「未动/方向不明」(0)
+DIR_DEADZONE_RAD = 0.01
+
+
+def load_joint_map():
+    """读取关节映射模板（robot / gear_ratio / joints / execute）。读不到返回空 dict。"""
+    try:
+        with open(JOINT_MAP_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
 
 
 # ----------------------------------------------------------------- 工具函数
 def list_serial_ports():
-    ports = []
+    # ttyUSB 排在最前：电机走 USB-RS485，默认应优先选 ttyUSB，
+    # 否则下拉框会默认选到 ttyACM/ttyS，导致「读取所有角度」读错串口。
+    usb, acm, other = [], [], []
     for name in os.listdir("/dev"):
-        if name.startswith(("ttyUSB", "ttyACM", "ttyS")):
-            ports.append("/dev/" + name)
-    ports.sort()
+        if name.startswith("ttyUSB"):
+            usb.append("/dev/" + name)
+        elif name.startswith("ttyACM"):
+            acm.append("/dev/" + name)
+        elif name.startswith("ttyS"):
+            other.append("/dev/" + name)
+    ports = sorted(usb) + sorted(acm) + sorted(other)
     if "/dev/ttyUSB0" not in ports:
         ports.insert(0, "/dev/ttyUSB0")
     return ports
@@ -130,7 +156,20 @@ class Controller:
         self.cancel = threading.Event()
         self.detected_ids = []
         self.angles = []
+        self.active_port = ""     # 最近一次扫描到电机响应的串口，供前端自动选中
         self.status = "就绪"
+        # -- 姿态标定 --
+        self.joint_map = load_joint_map()
+        self.pose_prone = {}      # {id(int): 关节角 rad} 趴姿
+        self.pose_stand = {}      # {id(int): 关节角 rad} 站姿
+        self.continuous = False   # 持续读取模式是否开启
+        self.cont_stop = threading.Event()
+        self.cont_proc = None     # 持续读取当前的子进程（供停止时终止）
+        # 尽力而为地记录电机是否处于工厂(boot)模式：
+        # 修改 ID(changeid) 会切到工厂模式 -> True；
+        # 切回电机模式(swmotor) -> False。仅反映本进程内的操作，
+        # 不能感知电机重新上电后仍停留在工厂模式的情况。
+        self.factory_mode = False
 
     # -- 共享状态 --
     def append(self, line):
@@ -157,6 +196,11 @@ class Controller:
                 "status": self.status,
                 "detected_ids": self.detected_ids,
                 "angles": self.angles,
+                "active_port": self.active_port,
+                "factory_mode": self.factory_mode,
+                "continuous": self.continuous,
+                "pose_prone": self.pose_prone,
+                "pose_stand": self.pose_stand,
                 "log": lines,
                 "log_index": total,
             }
@@ -181,7 +225,8 @@ class Controller:
         return proc
 
     # -- 前台单命令（查看 ID / 改 ID / 切电机模式 / 读角度） --
-    def _foreground(self, cmd, title, post_parse_ids=False, parse_angles=False):
+    def _foreground(self, cmd, title, post_parse_ids=False, parse_angles=False,
+                    factory_after=None):
         self.append("\n" + "=" * 60)
         shown = (["sudo"] + cmd) if NEED_SUDO else cmd
         self.append(f"[{title}]  $ {' '.join(shown)}")
@@ -226,13 +271,20 @@ class Controller:
                     self.detected_ids = responders
             if responders:
                 self.append(f"==> 响应电机 ID: {', '.join(map(str, responders))}（角度见上方表格）")
+            elif self.factory_mode:
+                self.append("==> 无电机响应：电机疑似仍处于工厂(boot)模式"
+                            "（之前做过「修改 ID」）。请先点「切回电机模式 (swmotor)」再读取角度。")
             else:
                 self.append("==> 无电机响应（确认已处于电机模式且接线正常）")
+
+        if factory_after is not None:
+            with self.lock:
+                self.factory_mode = factory_after
 
         self._finish(title)
 
     # -- 多串口批量（扫描全部 / 切回全部） --
-    def _multi(self, tool, ports, title, post_parse_ids):
+    def _multi(self, tool, ports, title, post_parse_ids, factory_after=None):
         self.append("\n" + "=" * 60)
         self.append(f"[{title}] 串口列表: {', '.join(ports)}")
         self.set_status(f"{title} 进行中（可取消）")
@@ -279,7 +331,228 @@ class Controller:
             if all_ids:
                 with self.lock:
                     self.detected_ids = all_ids
+
+        if factory_after is not None:
+            with self.lock:
+                self.factory_mode = factory_after
+
         self._finish(title)
+
+    # -- 无损扫描：遍历全部串口用 motor_ctrl read 列出有响应的 ID --
+    # 与 swboot 扫描不同，这里发零力矩运控帧，电机保持电机模式、不会被切到工厂模式。
+    def _scan_read(self, ports, title):
+        self.append("\n" + "=" * 60)
+        self.append(f"[{title}] 串口列表: {', '.join(ports)}")
+        self.set_status(f"{title} 进行中（可取消）")
+        per = {}
+        per_rc = {}
+        all_rows = []
+        for port in ports:
+            if self.cancel.is_set():
+                self.append("[已取消] 跳过剩余串口")
+                break
+            cmd = [MOTOR_CTRL, port, "all", "read"]
+            shown = (["sudo"] + cmd) if NEED_SUDO else cmd
+            self.append("\n--- " + port + " ---")
+            self.append("$ " + " ".join(shown))
+            try:
+                proc = self._spawn(cmd)
+            except FileNotFoundError as e:
+                self.append(f"[错误] {e}")
+                continue
+            with self.lock:
+                self.cmd_proc = proc
+            rows = []
+            for line in proc.stdout:
+                line = line.rstrip("\n")
+                self.append(line)
+                r = parse_angle_line(line)
+                if r and r.get("ok"):
+                    rows.append(r)
+            proc.wait()
+            with self.lock:
+                self.cmd_proc = None
+            self.append(f"[{port} 退出码 {proc.returncode}]")
+            per[port] = [r["id"] for r in rows]
+            per_rc[port] = proc.returncode
+            all_rows.extend(rows)
+
+        self.append("\n===== 无损扫描汇总（保持电机模式）=====")
+        all_ids = []
+        for p in ports:
+            if p not in per:
+                self.append(f"{p}: (已取消，未扫描)")
+                continue
+            ids = per[p]
+            if ids:
+                self.append(f"{p}: 响应 ID = {', '.join(map(str, ids))}")
+                for i in ids:
+                    if i not in all_ids:
+                        all_ids.append(i)
+            elif per_rc.get(p, 0) != 0:
+                self.append(f"{p}: 串口打开/通信失败（退出码 {per_rc[p]}），"
+                            "检查设备权限或该口是否被占用")
+            else:
+                self.append(f"{p}: 无响应（该串口上没有电机应答——未接电机/未上电/485 接线问题）")
+        good_port = next((p for p in ports if per.get(p)), "")
+        with self.lock:
+            self.angles = all_rows
+            if all_ids:
+                self.detected_ids = all_ids
+                # 有电机用运控帧应答 => 它们处于电机模式，清掉工厂模式标志
+                self.factory_mode = False
+            if good_port:
+                # 自动选中真正接电机的串口，方便接着用「读取所有角度」/驱动
+                self.active_port = good_port
+        if good_port:
+            self.append(f"==> 电机所在串口: {good_port}（已自动选中）")
+        if all_ids:
+            self.append(f"==> 共响应电机 ID: {', '.join(map(str, all_ids))}（未切换模式）")
+        else:
+            self.append("==> 无电机响应：确认接线与供电；若之前改过 ID，电机可能仍在工厂模式"
+                        "（不应答运控指令），请先点「切回电机模式 (swmotor)」再扫描。")
+        self._finish(title)
+
+    # -- 持续读取：循环跑 motor_ctrl read 刷新 self.angles，用于实时观察转动方向 --
+    # 不往日志刷每行（避免刷屏），只静默更新角度；start/stop 各记一条日志。
+    def _cont_start(self):
+        with self.lock:
+            if self.continuous:
+                return
+            self.continuous = True
+        self.cont_stop.clear()
+        self.append("\n" + "=" * 60)
+        self.append("[持续读取] 开始循环读取角度（约 1~2Hz）；记录趴/站姿、观察实时方向；再点一次停止。")
+        self.set_status("持续读取中…")
+        threading.Thread(target=self._cont_loop, daemon=True).start()
+
+    def _cont_loop(self):
+        ports = list_ttyusb_ports()
+        while not self.cont_stop.is_set():
+            rows = []
+            for port in ports:
+                if self.cont_stop.is_set():
+                    break
+                try:
+                    proc = self._spawn([MOTOR_CTRL, port, "all", "read"])
+                except FileNotFoundError:
+                    continue
+                with self.lock:
+                    self.cont_proc = proc
+                for line in proc.stdout:
+                    r = parse_angle_line(line.rstrip("\n"))
+                    if r and r.get("ok"):
+                        rows.append(r)
+                proc.wait()
+                with self.lock:
+                    self.cont_proc = None
+            with self.lock:
+                if rows:
+                    self.angles = rows
+                    self.detected_ids = [r["id"] for r in rows]
+            if self.cont_stop.wait(0.2):
+                break
+        with self.lock:
+            self.continuous = False
+            self.cont_proc = None
+        self.append("[持续读取] 已停止。")
+        self.set_status("持续读取已停止")
+
+    def _cont_stop_now(self):
+        self.cont_stop.set()
+        with self.lock:
+            proc = self.cont_proc
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+
+    # -- 姿态标定：把当前角度快照成趴姿 / 站姿 --
+    def _capture_pose(self, which):
+        with self.lock:
+            rows = list(self.angles)
+        pose = {}
+        for r in rows:
+            if not r.get("ok"):
+                continue
+            try:
+                pose[int(r["id"])] = float(r["joint"])
+            except (KeyError, ValueError, TypeError):
+                continue
+        label = "趴姿" if which == "prone" else "站姿"
+        if not pose:
+            self.append(f"[标定] 当前无可用角度，无法记录{label}；"
+                        "请先「读取所有角度」或开启「持续读取」。")
+            return False, f"当前无可用角度，无法记录{label}"
+        with self.lock:
+            if which == "prone":
+                self.pose_prone = pose
+            else:
+                self.pose_stand = pose
+        ids = ", ".join(str(i) for i in sorted(pose))
+        self.append(f"[标定] 已记录{label}: {len(pose)} 个关节（id {ids}）")
+        return True, "ok"
+
+    # -- 保存 stand_config.json（沿用 joint_map 模板，补 prone/stand/dir） --
+    def _save_config(self):
+        jm = self.joint_map or {}
+        with self.lock:
+            prone = dict(self.pose_prone)
+            stand = dict(self.pose_stand)
+        if not prone and not stand:
+            return False, "尚未记录任何姿态，先记录趴姿/站姿再保存"
+
+        gear = jm.get("gear_ratio") or 6.33
+
+        def deg(x):
+            return round(math.degrees(x), 3) if x is not None else None
+
+        def rotor(x):
+            return round(x * gear, 6) if x is not None else None
+
+        out_joints = []
+        for j in jm.get("joints", []):
+            jid = j.get("id")
+            p = prone.get(jid)
+            s = stand.get(jid)
+            d = None
+            delta_rotor = None
+            if p is not None and s is not None:
+                diff = s - p
+                d = 0 if abs(diff) < DIR_DEADZONE_RAD else (1 if diff > 0 else -1)
+                delta_rotor = round(diff * gear, 6)
+            out_joints.append({
+                "name": j.get("name"), "port": j.get("port"), "id": jid,
+                # robot_web.py 执行/验证用的字段（转子角坐标，delta=站-趴）
+                "prone_rotor": rotor(p), "stand_rotor": rotor(s),
+                "delta_rotor": delta_rotor,
+                # 关节角坐标 + 方向，便于人看
+                "prone_rad": round(p, 6) if p is not None else None,
+                "stand_rad": round(s, 6) if s is not None else None,
+                "prone_deg": deg(p), "stand_deg": deg(s),
+                "dir": d,
+            })
+        config = {
+            "robot": jm.get("robot"),
+            "gear_ratio": gear,
+            "_comment": ("由 motor_web.py 姿态标定生成。prone_rotor/stand_rotor/delta_rotor 为转子角(rad)，"
+                         "供 robot_web.py 站立执行/验证；prone_rad/stand_rad/dir 为关节角与方向，便于人看。"),
+            "_generated": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "joints": out_joints,
+            "execute": jm.get("execute", {}),
+        }
+        try:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            with open(STAND_CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+        except OSError as e:
+            self.append(f"[标定] 保存失败: {e}")
+            return False, f"保存失败: {e}"
+        n_full = sum(1 for j in out_joints if j["dir"] is not None)
+        self.append(f"[标定] 已保存配置: {STAND_CONFIG_PATH}"
+                    f"（{n_full}/{len(out_joints)} 个关节含完整 趴+站 方向）")
+        return True, STAND_CONFIG_PATH
 
     # -- 驱动 / 停止 --
     def _drive(self, port, mid, speed):
@@ -380,31 +653,37 @@ class Controller:
             busy = self.busy
             driving = self.drive_proc is not None and self.drive_proc.poll() is None
 
-        fg = ("view_id", "view_id_all", "change_id", "switch_motor",
-              "switch_motor_all", "read_angles")
+        fg = ("change_id", "switch_motor", "switch_motor_all",
+              "read_angles", "scan_read")
         if action in fg or action == "drive":
+            if self.continuous:
+                return False, "持续读取中：请先点「停止持续读取」"
             if busy:
                 return False, "忙：请等待当前命令完成，或点「取消当前命令」"
             if driving:
                 return False, "电机驱动中：请先点「停止」"
 
-        if action != "cancel" and not port:
+        # 这些动作不针对单个选中串口（全口扫描、姿态标定、持续读取等）
+        no_port = ("cancel", "scan_read", "switch_motor_all", "cont_start",
+                   "cont_stop", "capture_prone", "capture_stand", "save_config")
+        if action not in no_port and not port:
             return False, "请先选择串口"
 
-        if action == "view_id":
-            self._start_fg(self._foreground, [SWBOOT, port], "查看电机 ID", True, False)
-        elif action == "view_id_all":
+        if action == "scan_read":
             ports = list_ttyusb_ports()
             if not ports:
                 return False, "未找到任何 /dev/ttyUSB*"
-            self._start_fg(self._multi, SWBOOT, ports, "扫描全部串口 (swboot)", True)
+            if not os.path.isfile(MOTOR_CTRL):
+                return False, f"未找到 {MOTOR_CTRL}"
+            self._start_fg(self._scan_read, ports, "无损扫描全部串口 (读角度)")
         elif action == "switch_motor":
-            self._start_fg(self._foreground, [SWMOTOR, port], "切回电机模式", False, False)
+            # swmotor 把电机切回电机模式
+            self._start_fg(self._foreground, [SWMOTOR, port], "切回电机模式", False, False, False)
         elif action == "switch_motor_all":
             ports = list_ttyusb_ports()
             if not ports:
                 return False, "未找到任何 /dev/ttyUSB*"
-            self._start_fg(self._multi, SWMOTOR, ports, "切回全部串口 (swmotor)", False)
+            self._start_fg(self._multi, SWMOTOR, ports, "切回全部串口 (swmotor)", False, False)
         elif action == "change_id":
             old = str(p.get("old", "")).strip()
             new = str(p.get("new", "")).strip()
@@ -412,14 +691,18 @@ class Controller:
                 return False, "原 ID / 新 ID 必须是数字"
             if old == new:
                 return False, "原 ID 与新 ID 不能相同"
+            # changeid 同样让电机停在工厂(boot)模式
             self._start_fg(self._foreground, [CHANGEID, port, old, new],
-                           f"修改电机 ID: {old} -> {new}", False, False)
+                           f"修改电机 ID: {old} -> {new}", False, False, True)
         elif action == "read_angles":
             target = str(p.get("target", "all")).strip()
             if target != "all" and (not target.isdigit() or not 0 <= int(target) <= 15):
                 return False, "电机 ID 必须在 0~15（或用 all）"
             if not os.path.isfile(MOTOR_CTRL):
                 return False, f"未找到 {MOTOR_CTRL}"
+            if self.factory_mode:
+                self.append("[提示] 检测到之前做过「修改 ID」，电机可能仍在工厂(boot)模式；"
+                            "工厂模式下不应答运控指令，读不到角度时请先点「切回电机模式 (swmotor)」。")
             title = "读取所有角度" if target == "all" else f"读取角度 id={target}"
             self._start_fg(self._foreground, [MOTOR_CTRL, port, target, "read"],
                            title, False, True)
@@ -440,6 +723,23 @@ class Controller:
             if not mid.isdigit() or not 0 <= int(mid) <= 15:
                 return False, "电机 ID 必须在 0~15"
             threading.Thread(target=self._stop, args=(port, mid), daemon=True).start()
+        elif action == "cont_start":
+            ports = list_ttyusb_ports()
+            if not ports:
+                return False, "未找到任何 /dev/ttyUSB*"
+            if not os.path.isfile(MOTOR_CTRL):
+                return False, f"未找到 {MOTOR_CTRL}"
+            if busy or driving:
+                return False, "忙/驱动中：请先停止再开启持续读取"
+            self._cont_start()
+        elif action == "cont_stop":
+            self._cont_stop_now()
+        elif action == "capture_prone":
+            return self._capture_pose("prone")
+        elif action == "capture_stand":
+            return self._capture_pose("stand")
+        elif action == "save_config":
+            return self._save_config()
         elif action == "cancel":
             self._cancel()
         else:
@@ -452,16 +752,15 @@ CTRL = Controller()
 
 def check_tools():
     missing = [
-        name for name, pth in (("swboot", SWBOOT), ("changeid", CHANGEID),
-                               ("swmotor", SWMOTOR))
+        name for name, pth in (("changeid", CHANGEID), ("swmotor", SWMOTOR))
         if not os.path.isfile(pth)
     ]
     if missing:
         CTRL.append(f"[警告] 在 {TOOL_DIR} 下未找到: {', '.join(missing)}")
     if not os.path.isfile(MOTOR_CTRL):
         CTRL.append(f"[警告] 未找到 {MOTOR_CTRL}，请先在 build/ 执行: cmake .. && make motor_ctrl")
-    CTRL.append("[提示] 查看 / 修改 ID 会让电机进入工厂模式（绿灯每秒快闪 3 次）；"
-                "完成后务必点「切回电机模式」，否则重新上电仍在工厂模式。")
+    CTRL.append("[提示] 只有「修改电机 ID」会让电机进入工厂模式（绿灯每秒快闪 3 次）；"
+                "改完务必点「切回电机模式」，否则重新上电仍在工厂模式。其余操作（扫描/读角度/驱动）均不切模式。")
     CTRL.append("[就绪] 选择串口后即可操作。")
 
 
@@ -484,6 +783,15 @@ PAGE = """<!DOCTYPE html>
   h1 { font-size: 18px; margin: 0 0 12px; }
   fieldset { border: 1px solid var(--bd); border-radius: 8px; margin: 0 0 12px; padding: 10px 12px; background: #fff; }
   legend { font-weight: 600; padding: 0 6px; color: #555; }
+  details.panel {
+    border: 1px solid var(--bd); border-radius: 8px; margin: 0 0 12px;
+    padding: 6px 12px 10px; background: #fff;
+  }
+  details.panel > summary {
+    font-weight: 600; color: #555; cursor: pointer; padding: 4px 0;
+    list-style: revert;
+  }
+  details.panel[open] > summary { margin-bottom: 6px; }
   .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
   label { color: #555; }
   select, input { padding: 5px 7px; border: 1px solid var(--bd); border-radius: 6px; font-size: 14px; }
@@ -515,37 +823,42 @@ PAGE = """<!DOCTYPE html>
 <body>
   <h1>GO-M8010-6 电机管理 <span class="muted" style="font-size:13px">（网页版）</span></h1>
 
+  <div id="factoryWarn" style="display:none; margin:0 0 12px; padding:8px 12px;
+       border:1px solid #e0a800; border-radius:8px; background:#fff8e1; color:#a60; font-size:13px;">
+    ⚠️ 电机疑似处于工厂(boot)模式（刚做过修改 ID）。此模式下读不到角度、也无法驱动，
+    请先点「2. 切回电机模式 (swmotor)」。
+  </div>
+
   <fieldset>
     <legend>串口</legend>
     <div class="row">
       <label>串口号</label>
       <select id="port" style="min-width:160px"></select>
       <button class="action" onclick="refreshPorts()">刷新</button>
-      <button class="action" onclick="api('view_id_all')">扫描全部 ttyUSB*</button>
+      <button class="action primary" onclick="api('scan_read')" title="遍历所有 ttyUSB 用 motor_ctrl 读角度，列出有响应的电机；保持电机模式，不切工厂模式">扫描电机 (读角度，不切模式)</button>
       <span class="pill">检测到 ID: <span id="detected">（无）</span></span>
     </div>
   </fieldset>
 
-  <fieldset>
-    <legend>ID 管理</legend>
+  <details class="panel">
+    <summary>ID 管理（修改电机 ID，会进工厂模式）</summary>
     <div class="row">
-      <button class="action" onclick="api('view_id')">1. 查看电机 ID (swboot)</button>
-      <span style="width:16px"></span>
       <label>原 ID</label><select id="oldId"></select>
       <label>新 ID</label><select id="newId"></select>
-      <button class="action" onclick="doChangeId()">2. 修改电机 ID (changeid)</button>
+      <button class="action" onclick="doChangeId()">1. 修改电机 ID (changeid)</button>
+      <span class="muted" style="font-size:13px">← 此操作会让电机进入工厂(boot)模式</span>
     </div>
     <div class="row" style="margin-top:8px">
-      <button class="action" onclick="api('switch_motor')">3. 切回电机模式 (swmotor)</button>
+      <button class="action primary" onclick="api('switch_motor')">2. 切回电机模式 (swmotor)</button>
       <button class="action" onclick="api('switch_motor_all')">切回全部 ttyUSB*</button>
     </div>
-  </fieldset>
+  </details>
 
   <fieldset>
     <legend>电机控制（需电机已处于电机模式）</legend>
     <div class="row">
       <label>电机 ID</label><select id="driveId"></select>
-      <label>转速 (rad/s)</label><input id="speed" type="number" step="0.001" value="39.752">
+      <label>转速 (rad/s)</label><input id="speed" type="number" step="0.001" value="0.1">
       <button class="action primary" onclick="doDrive()">▶ 驱动转动</button>
       <button id="btnStop" class="danger" onclick="doStop()" disabled>■ 停止</button>
       <span style="width:16px"></span>
@@ -566,10 +879,36 @@ PAGE = """<!DOCTYPE html>
     </table>
   </fieldset>
 
+  <fieldset>
+    <legend>姿态标定 → stand_config.json</legend>
+    <div class="row">
+      <button id="btnCont" class="calib" onclick="toggleCont()">▶ 持续读取</button>
+      <span style="width:8px"></span>
+      <button class="calib" onclick="api('capture_prone')">① 记录趴姿</button>
+      <button class="calib" onclick="api('capture_stand')">② 记录站姿</button>
+      <span style="width:8px"></span>
+      <button class="calib" onclick="api('save_config')">💾 保存 stand_config.json</button>
+      <span class="muted" style="font-size:13px">流程：开「持续读取」→ 摆趴姿点①→ 摆站姿点②→ 保存</span>
+    </div>
+    <div class="muted" style="font-size:12.5px; margin:6px 0 8px">
+      实时方向 = 当前角相对【趴姿】的变化符号；标定方向 = sign(站姿 − 趴姿)，写入配置 dir 字段。
+      <span style="color:var(--pri)">＋</span> 增大 / <span style="color:#d64545">－</span> 减小 / · 几乎不动。
+    </div>
+    <table>
+      <thead><tr>
+        <th>关节</th><th>ID</th><th>趴姿 (°)</th><th>站姿 (°)</th><th>当前 (°)</th>
+        <th>实时方向<br>(趴→当前)</th><th>标定方向<br>(趴→站)</th>
+      </tr></thead>
+      <tbody id="calibBody">
+        <tr><td colspan="7" class="muted">（加载 joint_map 中…）</td></tr>
+      </tbody>
+    </table>
+  </fieldset>
+
   <p class="tip">
-    提示：查看 / 修改 ID 会让电机进入工厂模式（背部绿灯每秒快闪 3 次）。
+    提示：只有「修改电机 ID」会让电机进入工厂模式（背部绿灯每秒快闪 3 次）。
     操作前确保所有电机已停止、主机不再发送运动控制指令。
-    完成后必须点「切回电机模式」，否则重新上电仍在工厂模式。
+    改完必须点「切回电机模式」，否则重新上电仍在工厂模式。扫描/读角度/驱动都不会切模式。
   </p>
 
   <fieldset>
@@ -593,6 +932,18 @@ PAGE = """<!DOCTYPE html>
 
   let logIndex = 0;
   let lastDetected = '';
+  let lastActivePort = '';
+  let jointMap = null;
+  let contOn = false;
+  const DIR_DEAD = 0.01;  // rad，与后端一致：变化小于此值视为「未动」
+
+  async function loadJointMap(){
+    try{
+      const r = await fetch('/api/jointmap'); jointMap = await r.json();
+    }catch(e){ jointMap = {}; }
+    updateCalib({});
+  }
+  function toggleCont(){ api(contOn ? 'cont_stop' : 'cont_start'); }
 
   async function refreshPorts(){
     try{
@@ -628,11 +979,16 @@ PAGE = """<!DOCTYPE html>
   function doStop(){ api('stop', {id: document.getElementById('driveId').value}); }
 
   function updateButtons(s){
-    const lock = s.busy || s.driving;
+    // 持续读取期间也锁住普通操作（标定按钮 .calib 不受影响，便于记录/停止）
+    const lock = s.busy || s.driving || s.continuous;
     document.querySelectorAll('button.action').forEach(b => { b.disabled = lock; });
     document.querySelectorAll('button.primary').forEach(b => { b.disabled = lock; });
     document.getElementById('btnStop').disabled = !s.driving;
     document.getElementById('btnCancel').disabled = !s.busy;
+    contOn = !!s.continuous;
+    const bc = document.getElementById('btnCont');
+    bc.textContent = contOn ? '■ 停止持续读取' : '▶ 持续读取';
+    bc.classList.toggle('danger', contOn);
   }
 
   function updateDetected(ids){
@@ -644,6 +1000,17 @@ PAGE = """<!DOCTYPE html>
       document.getElementById('oldId').value = String(ids[0]);
       document.getElementById('driveId').value = String(ids[0]);
     }
+  }
+
+  function updateActivePort(p){
+    // 扫描到电机后，自动把端口下拉切到那根串口（仅在变化时执行，避免打断手动选择）
+    if (!p || p === lastActivePort) return;
+    lastActivePort = p;
+    const sel = document.getElementById('port');
+    let found = false;
+    for (const o of sel.options) if (o.value === p) found = true;
+    if (!found){ const o=document.createElement('option'); o.value=p; o.textContent=p; sel.appendChild(o); }
+    sel.value = p;
   }
 
   function updateAngles(rows){
@@ -662,6 +1029,41 @@ PAGE = """<!DOCTYPE html>
     }
   }
 
+  function degCell(rad){
+    return (rad===null || rad===undefined) ? '<span class="muted">—</span>'
+                                           : (rad*180/Math.PI).toFixed(2);
+  }
+  function dirSym(diffRad){
+    if (diffRad===null || diffRad===undefined || isNaN(diffRad)) return '<span class="muted">—</span>';
+    if (Math.abs(diffRad) < DIR_DEAD) return '<span class="muted">·</span>';
+    return diffRad > 0 ? '<span style="color:var(--pri);font-weight:600">＋</span>'
+                       : '<span style="color:#d64545;font-weight:600">－</span>';
+  }
+  function updateCalib(s){
+    const tb = document.getElementById('calibBody');
+    if (!jointMap || !jointMap.joints || !jointMap.joints.length){
+      tb.innerHTML = '<tr><td colspan="7" class="muted">（未找到 joint_map.default.json，无法显示关节表）</td></tr>';
+      return;
+    }
+    const cur = {};
+    (s.angles||[]).forEach(r => { if (r.ok!==false) cur[String(r.id)] = parseFloat(r.joint); });
+    const prone = s.pose_prone || {};
+    const stand = s.pose_stand || {};
+    let html = '';
+    for (const j of jointMap.joints){
+      const id = String(j.id);
+      const p  = (id in prone) ? prone[id] : null;
+      const st = (id in stand) ? stand[id] : null;
+      const c  = (id in cur)   ? cur[id]   : null;
+      const liveDir = (p!==null && c!==null) ? dirSym(c - p) : '<span class="muted">—</span>';
+      const calDir  = (p!==null && st!==null) ? dirSym(st - p) : '<span class="muted">—</span>';
+      html += '<tr><td>'+(j.name||'')+'</td><td>'+j.id+'</td>'+
+              '<td>'+degCell(p)+'</td><td>'+degCell(st)+'</td><td>'+degCell(c)+'</td>'+
+              '<td>'+liveDir+'</td><td>'+calDir+'</td></tr>';
+    }
+    tb.innerHTML = html;
+  }
+
   async function poll(){
     try{
       const r = await fetch('/api/state?since=' + logIndex);
@@ -675,12 +1077,16 @@ PAGE = """<!DOCTYPE html>
       logIndex = s.log_index;
       document.getElementById('status').textContent = s.status;
       updateButtons(s);
+      updateActivePort(s.active_port);
       updateDetected(s.detected_ids);
       updateAngles(s.angles);
+      updateCalib(s);
+      document.getElementById('factoryWarn').style.display = s.factory_mode ? '' : 'none';
     }catch(e){}
   }
 
   refreshPorts();
+  loadJointMap();
   poll();
   setInterval(poll, 400);
 </script>
@@ -715,6 +1121,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(PAGE.encode("utf-8"), "text/html; charset=utf-8")
         elif u.path == "/api/ports":
             self._json({"ports": list_serial_ports()})
+        elif u.path == "/api/jointmap":
+            self._json(CTRL.joint_map or {})
         elif u.path == "/api/state":
             q = parse_qs(u.query)
             try:
