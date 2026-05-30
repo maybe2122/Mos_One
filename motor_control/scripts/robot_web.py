@@ -1035,6 +1035,8 @@ PAGE = r"""<!DOCTYPE html>
     white-space:nowrap; background:#e3f4e7; color:#2a8a3e; }
   #driveBar.on #driveState{ background:#d64545; color:#fff; animation:dpulse 1s steps(1,end) infinite; }
   @keyframes dpulse{ 50%{ opacity:.45; } }
+  /* 图标（● / ⏹）单独放大：相对各自所在文字再 2 倍 */
+  .bigico{ font-size:2em; vertical-align:middle; }
   #btnEstop{ width:100%; background:#d64545; color:#fff; border:2px solid #fff; border-radius:8px;
     font-size:36px; font-weight:800; letter-spacing:1px; line-height:1.25; padding:16px 8px; cursor:pointer;
     box-shadow:0 1px 4px rgba(0,0,0,.25); }
@@ -1046,8 +1048,8 @@ PAGE = r"""<!DOCTYPE html>
 </head>
 <body>
   <div id="driveBar">
-    <span id="driveState">● 未驱动</span>
-    <button id="btnEstop" type="button" onclick="estopNow()">⏹ 急停<br>STOP</button>
+    <span id="driveState"><span class="bigico">●</span> 未驱动</span>
+    <button id="btnEstop" type="button" onclick="estopNow()"><span class="bigico">⏹</span> 急停<br>STOP</button>
   </div>
   <div id="driveEdge"></div>
   <h1>🐕 四足机器人操控 <span class="muted" style="font-size:13px">（站立标定 / 执行）</span></h1>
@@ -1220,7 +1222,7 @@ PAGE = r"""<!DOCTYPE html>
   function render(s){
     document.getElementById('phasePill').textContent = '阶段: ' + s.phase;
     const driving = !!(s.holding || s.standing);
-    document.getElementById('driveState').textContent = driving ? '● 驱动中' : '● 未驱动';
+    document.getElementById('driveState').innerHTML = driving ? '<span class="bigico">●</span> 驱动中' : '<span class="bigico">●</span> 未驱动';
     document.getElementById('driveBar').classList.toggle('on', driving);
     document.getElementById('driveEdge').classList.toggle('on', driving);
     const cp=document.getElementById('cfgPill');
