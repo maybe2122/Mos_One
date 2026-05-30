@@ -81,6 +81,22 @@ def joints_by_port(joints):
     return groups
 
 
+def parse_opt_gain(raw):
+    """解析前端传来的可选增益（K_P / K_W）：
+       空 -> None（表示沿用配置 execute 里的默认值）；
+       非数字 -> "ERR"（调用方据此报错）；
+       合法 -> clamp 到 [0, 25.599]（手册 K_P/K_W 上限）。
+    """
+    s = str(raw).strip()
+    if s == "":
+        return None
+    try:
+        v = float(s)
+    except (TypeError, ValueError):
+        return "ERR"
+    return max(0.0, min(25.599, v))
+
+
 # ----------------------------------------------------------------- 控制器
 class RobotController:
     def __init__(self):
@@ -91,6 +107,9 @@ class RobotController:
         self.standing_thread = None  # 站立执行线程
         self.abort = threading.Event()
         self.servo_procs = {}        # port -> Popen（流式伺服进程）
+        self.hold_scope = ""         # 当前 servo 锁位保持的范围描述（空=已松开）；供前端「是否松开」显示
+        self.notice = None           # 供前端弹窗的后台通知 {id,text,level}；轮询到新 id 弹一次
+        self.notice_id = 0
 
         # 标定与配置数据（关节角均以「转子角 rad」存储，与 motor_ctrl 的 Pos 一致）
         self.joints, self.execute = load_joint_template()
@@ -99,6 +118,9 @@ class RobotController:
         self.current = {}            # name -> rotor（最近一次读取）
         self.current_ok = {}         # name -> bool
         self.last_dev = {}           # name -> 与配置趴姿的偏差（校验用）
+        self.feedback = {}           # name -> {vel,tau,errd,temp,...} servo 实时反馈（保持/运动时）
+        self._id2name = {int(jt["id"]): jt["name"] for jt in self.joints}  # 电机 id -> 关节名
+        self._config_mtime = None    # stand_config.json 的 mtime，用于检测外部更新后自动重载
         self.config = self._load_config()
         self.phase = "IDLE"          # IDLE/PRONE_DONE/STAND_DONE/CONFIGURED/EXECUTING/STANDING/ERROR
         self.status = "就绪"
@@ -118,18 +140,66 @@ class RobotController:
         with self.lock:
             self.status = s
 
+    def _notify(self, text, level="bad"):
+        """记录一条供前端弹窗的通知。后台线程里的拒绝/异常无法通过 api() 返回值
+        告知页面（动作早已异步返回 ok），改为写入 notice，前端轮询到新的 id 就 alert 一次。"""
+        with self.lock:
+            self.notice_id += 1
+            self.notice = {"id": self.notice_id, "text": str(text), "level": level}
+
     def _load_config(self):
         if os.path.isfile(STAND_CONFIG):
             try:
                 with open(STAND_CONFIG, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    cfg = json.load(f)
+                try:
+                    self._config_mtime = os.path.getmtime(STAND_CONFIG)
+                except OSError:
+                    self._config_mtime = None
+                return cfg
             except Exception as e:
                 self.append(f"[警告] 读取 {STAND_CONFIG} 失败: {e}")
+        self._config_mtime = None
         return None
+
+    def _reload_config_now(self):
+        """手动从磁盘重新加载 stand_config.json，并打印一行摘要（供页面「重新加载配置」按钮）。"""
+        cfg = self._load_config()   # 内部会更新 self._config_mtime
+        with self.lock:
+            self.config = cfg
+            if cfg is not None and self.phase == "IDLE":
+                self.phase = "CONFIGURED"
+        if cfg is None:
+            self.append(f"[配置] 未找到或无法读取 {STAND_CONFIG}（请先在 motor_web 标定并保存）。")
+            return False, f"未找到/无法读取 {STAND_CONFIG}"
+        js = cfg.get("joints", [])
+        n_dir = sum(1 for j in js if j.get("dir") is not None)
+        n_ver = sum(1 for j in js if j.get("verified"))
+        self.append(f"[配置] 已重新加载 {STAND_CONFIG}：机器人={cfg.get('robot')} "
+                    f"减速比={cfg.get('gear_ratio')} 关节={len(js)} 含方向={n_dir} "
+                    f"已验证={n_ver} 生成于={cfg.get('_generated', '?')}")
+        return True, "ok"
+
+    def _refresh_config_if_changed(self):
+        """若磁盘上的 stand_config.json 比内存里的新（被 motor_web 标定 / 手动改过），
+        自动重载，保证关节角表里的趴姿/站姿始终跟配置文件一致。"""
+        try:
+            mtime = os.path.getmtime(STAND_CONFIG) if os.path.isfile(STAND_CONFIG) else None
+        except OSError:
+            mtime = None
+        if mtime == self._config_mtime:
+            return
+        cfg = self._load_config()   # 内部会更新 self._config_mtime
+        self.config = cfg
+        if cfg is not None:
+            if self.phase in ("IDLE",):
+                self.phase = "CONFIGURED"
+            self.append(f"[配置] 检测到 {STAND_CONFIG} 已更新，关节角表已按最新配置刷新。")
 
     # -- 状态快照 --
     def snapshot(self, since):
         with self.lock:
+            self._refresh_config_if_changed()
             total = self.dropped + len(self.log)
             start = max(since, self.dropped)
             lines = self.log[start - self.dropped:]
@@ -141,6 +211,7 @@ class RobotController:
             for jt in self.joints:
                 name = jt["name"]
                 cj = cfg_joints.get(name, {})
+                fb = self.feedback.get(name, {})
                 rows.append({
                     "name": name, "port": jt["port"], "id": jt["id"],
                     "prone": cj.get("prone_rotor", self.prone.get(name)),
@@ -150,7 +221,19 @@ class RobotController:
                     "ok": self.current_ok.get(name),
                     "dev": self.last_dev.get(name),
                     "verified": cj.get("verified", False),
+                    "fb_vel": fb.get("vel"),     # 实测转子角速度 rad/s
+                    "fb_tau": fb.get("tau"),     # 实测力矩 N·m
+                    "fb_errd": fb.get("errd"),   # 跟踪误差（关节°）
+                    "fb_temp": fb.get("temp"),   # 温度 ℃
                 })
+            holding = False
+            for _p in self.servo_procs.values():
+                try:
+                    if _p.poll() is None:   # 进程还活着 = 电机仍带电锁位保持（未松开）
+                        holding = True
+                        break
+                except Exception:
+                    pass
             return {
                 "phase": self.phase,
                 "status": self.status,
@@ -158,9 +241,13 @@ class RobotController:
                 "standing": self.standing_thread is not None
                             and self.standing_thread.is_alive(),
                 "configured": self.config is not None,
+                "holding": holding,
+                "hold_scope": self.hold_scope,
+                "notice": self.notice,
                 "has_prone": bool(self.prone),
                 "has_stand": bool(self.stand),
                 "execute": (self.config or {}).get("execute", self.execute),
+                "gear_ratio": (self.config or {}).get("gear_ratio", GEAR_RATIO),
                 "joints": rows,
                 "log": lines,
                 "log_index": total,
@@ -286,12 +373,18 @@ class RobotController:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
         with self.lock:
             self.config = cfg
+            try:
+                self._config_mtime = os.path.getmtime(STAND_CONFIG)
+            except OSError:
+                self._config_mtime = None
             self.phase = "CONFIGURED"
         self.append(f"\n[保存] 配置已写入 {STAND_CONFIG}")
         for j in joints_out:
             arrow = "↑" if j["delta_rotor"] >= 0 else "↓"
-            self.append(f"  {j['name']}: 趴={j['prone_rotor']:.4f} 站={j['stand_rotor']:.4f} "
-                        f"Δ={j['delta_rotor']:+.4f} {arrow}")
+            pj = math.degrees(j["prone_rotor"] / GEAR_RATIO)
+            sj = math.degrees(j["stand_rotor"] / GEAR_RATIO)
+            dj = math.degrees(j["delta_rotor"] / GEAR_RATIO)
+            self.append(f"  {j['name']}: 趴={pj:.2f}° 站={sj:.2f}° Δ={dj:+.2f}° {arrow}")
         return True, "配置已保存"
 
     # -- 单关节方向：confirm 确认 / unconfirm 取消确认 / invert 取反(翻转 delta/dir 并存盘) --
@@ -338,6 +431,10 @@ class RobotController:
             return False, f"保存失败: {e}"
         with self.lock:
             self.config = cfg
+            try:
+                self._config_mtime = os.path.getmtime(STAND_CONFIG)
+            except OSError:
+                self._config_mtime = None
         self.append("[标定] " + msg)
         return True, msg
 
@@ -358,16 +455,55 @@ class RobotController:
 
         def reader(p, tag):
             for line in p.stdout:
-                self.append(f"[{tag}] {line.rstrip()}")
+                s = line.rstrip()
+                if s.startswith("FB "):
+                    self._update_feedback(s)   # 实时反馈行喂给表格，不进日志
+                else:
+                    self.append(f"[{tag}] {s}")
 
         threading.Thread(target=reader, args=(proc, os.path.basename(port)),
                          daemon=True).start()
         return proc
 
+    # 解析 servo 子进程的 "FB id=.. pos=.. vel=.. tau=.. temp=.. merr=.. ok=.. errd=.." 行，
+    # 存成每关节实时反馈供前端表格显示；同时用 pos 实时刷新「当前角」。
+    def _update_feedback(self, line):
+        def g(key):
+            m = re.search(rf"\b{key}=(-?\d+(?:\.\d+)?)", line)
+            return m.group(1) if m else None
+        sid = g("id")
+        if sid is None:
+            return
+        try:
+            mid = int(float(sid))
+        except ValueError:
+            return
+        name = self._id2name.get(mid)
+        if not name:
+            return
+
+        def fnum(key):
+            v = g(key)
+            return float(v) if v is not None else None
+
+        ok = g("ok") == "1"
+        fb = {"vel": fnum("vel"), "tau": fnum("tau"), "errd": fnum("errd"),
+              "temp": int(float(g("temp"))) if g("temp") is not None else None,
+              "merr": int(float(g("merr"))) if g("merr") is not None else None,
+              "ok": ok}
+        pos = fnum("pos")
+        with self.lock:
+            self.feedback[name] = fb
+            if pos is not None:                # 保持/运动时也实时刷新当前角
+                self.current[name] = pos
+                self.current_ok[name] = ok
+
     def _stop_servos(self, brake=True):
         with self.lock:
             procs = dict(self.servo_procs)
             self.servo_procs = {}
+            self.hold_scope = ""      # 电机即将释放，清除「保持中」标记
+            self.feedback = {}        # 松开后不再有实时反馈，清空表格反馈列
         for port, proc in procs.items():
             try:
                 if brake and proc.poll() is None:
@@ -388,20 +524,22 @@ class RobotController:
                         pass
 
     # -- 站立执行（安全校验 + 限速插值 + 流式伺服） --
-    def _do_stand(self, legs=None):
+    def _do_stand(self, legs=None, kp=None, kw=None, skip_verify=False):
         try:
-            self._stand_impl(legs)
+            self._stand_impl(legs, kp, kw, skip_verify=skip_verify)
         except Exception as e:
             self.append(f"[异常] 站立执行出错: {e}")
             self.set_status(f"站立异常: {e}")
+            self._notify(f"站立执行出错：{e}")
             self._stop_servos()
             with self.lock:
                 self.phase = "ERROR"
 
-    def _stand_impl(self, legs=None):
+    def _stand_impl(self, legs=None, kp_override=None, kw_override=None, skip_verify=False):
         cfg = self._load_config()
         if not cfg:
             self.append("[错误] 没有配置文件，请先完成标定并保存。")
+            self._notify("没有配置文件，无法执行：请先在标定页完成 ①②③ 并保存。")
             with self.lock:
                 self.phase = "IDLE"
             return
@@ -415,6 +553,7 @@ class RobotController:
             scope = "整机站立"
         if not active:
             self.append(f"[错误] 没有匹配的关节: {legs}")
+            self._notify(f"没有匹配的关节：{legs}")
             with self.lock:
                 self.phase = "CONFIGURED"
             return
@@ -423,8 +562,10 @@ class RobotController:
         vmax_joint = float(ex.get("max_joint_vel_rad_s", 0.1))
         min_dur = float(ex.get("min_duration_s", 1.0))
         rate = float(ex.get("rate_hz", 100))
-        kp = float(ex.get("k_p", 8.0))
-        kw = float(ex.get("k_w", 0.8))
+        kp = float(ex.get("k_p", 8.0)) if kp_override is None else float(kp_override)
+        kw = float(ex.get("k_w", 0.8)) if kw_override is None else float(kw_override)
+        if kp_override is not None or kw_override is not None:
+            self.append(f"[{scope}] 使用页面指定增益 K_P={kp} K_W={kw}（覆盖配置默认）")
 
         self.append("\n" + "=" * 56)
         self.append(f"[{scope}] 读取当前角度做安全校验 ...")
@@ -438,37 +579,59 @@ class RobotController:
 
         cfg_joints = {j["name"]: j for j in cfg["joints"]}
         cur, prone, delta = {}, {}, {}
-        bad = []
+        hard_bad = []   # 配置缺失 / 无响应：无法执行，「关闭安全校验」也不能绕过
+        dev_bad = []    # 趴姿偏差超阈值：安全校验项，可被「关闭安全校验」跳过
         with self.lock:
             self.last_dev = {}
         for jt in active:
             n = jt["name"]
             cj = cfg_joints.get(n)
             if cj is None:
-                bad.append(f"{n}(配置缺失)")
+                hard_bad.append(f"{n}(配置缺失)")
                 continue
             if not oks.get(n) or res.get(n) is None:
-                bad.append(f"{n}(无响应)")
+                hard_bad.append(f"{n}(无响应)")
                 continue
             dev = abs(res[n] - cj["prone_rotor"])
             with self.lock:
                 self.last_dev[n] = round(dev, 4)
             if dev > thr:
-                bad.append(f"{n}(偏差 {dev:.3f} > {thr})")
+                dev_bad.append(f"{n}(偏差 {dev:.3f} > {thr})")
             cur[n] = res[n]
             prone[n] = cj["prone_rotor"]
             delta[n] = cj["delta_rotor"]
 
-        if bad:
-            msg = "安全校验未通过，拒绝执行：" + "，".join(bad)
+        if hard_bad:
+            msg = "无法执行（缺配置 / 无响应）：" + "，".join(hard_bad)
             self.append(f"[拒绝] {msg}")
-            self.append("       请确认机器人已自然趴好、电机处于电机模式，再重试。")
-            self.set_status("执行被拒绝（安全校验未通过）")
+            self.append("       请确认电机处于电机模式、接线正常，再重试。")
+            self.set_status("执行被拒绝（缺配置/无响应）")
+            self._notify("⛔ 无法执行：\n\n" + "，".join(hard_bad)
+                         + "\n\n请检查电机模式 / 接线后重试。")
             with self.lock:
                 self.phase = "CONFIGURED"
             return
 
-        self.append(f"[通过] {len(active)} 个关节贴近配置趴姿（阈值 {thr} rad）。")
+        if dev_bad and not skip_verify:
+            msg = "安全校验未通过，拒绝执行：" + "，".join(dev_bad)
+            self.append(f"[拒绝] {msg}")
+            self.append("       请确认机器人已自然趴好、电机处于电机模式，再重试。")
+            self.append("       （如确需在非趴姿下测试，可勾选「关闭安全校验」后再点「只测这条腿」。）")
+            self.set_status("执行被拒绝（安全校验未通过）")
+            self._notify("⛔ 安全校验未通过，已拒绝执行：\n\n" + "，".join(dev_bad)
+                         + "\n\n请确认这条腿已自然趴好（各关节贴近标定趴姿）、电机处于电机模式后重试；"
+                           "若只想验证电机方向，可改用「方向验证」（不要求趴姿）。")
+            with self.lock:
+                self.phase = "CONFIGURED"
+            return
+
+        if dev_bad and skip_verify:
+            self.append("[⚠️ 安全校验已关闭] 跳过趴姿偏差检查，强行按『当前角 + Δ』移动："
+                        + "，".join(dev_bad))
+            self.append("       危险：若该腿离趴姿较远会大幅运动！请盯住急停。")
+            self.set_status(f"{scope}：⚠️ 已关闭安全校验，执行中")
+        else:
+            self.append(f"[通过] {len(active)} 个关节贴近配置趴姿（阈值 {thr} rad）。")
 
         # 目标 = 当前 + delta；按关节限速算总时长（位移最大的关节恰好 = vmax）
         targets = {n: cur[n] + delta[n] for n in cur}
@@ -488,6 +651,8 @@ class RobotController:
             with self.lock:
                 self.servo_procs[port] = self._spawn_servo(port, kp, kw)
         time.sleep(0.2)  # 等 servo 进程起来（含 sudo 鉴权）
+        with self.lock:
+            self.hold_scope = scope   # 标记电机已锁位保持，供「是否松开」显示
 
         dt = 1.0 / rate
         for k in range(1, N + 1):
@@ -525,20 +690,22 @@ class RobotController:
 
     # -- 方向验证：单腿，每个关节从当前位置朝「站立方向」各转固定角度（默认 10°）--
     # 与站立不同：不要求处于趴姿（不做 prone 偏差校验），只做小幅相对位移验证方向符号。
-    def _do_dir_test(self, leg, deg=10.0, joint=None):
+    def _do_dir_test(self, leg, deg=10.0, joint=None, kp=None, kw=None):
         try:
-            self._dir_test_impl(leg, deg, joint)
+            self._dir_test_impl(leg, deg, joint, kp, kw)
         except Exception as e:
             self.append(f"[异常] 方向验证出错: {e}")
             self.set_status(f"方向验证异常: {e}")
+            self._notify(f"方向验证出错：{e}")
             self._stop_servos()
             with self.lock:
                 self.phase = "ERROR"
 
-    def _dir_test_impl(self, leg, deg=10.0, joint=None):
+    def _dir_test_impl(self, leg, deg=10.0, joint=None, kp_override=None, kw_override=None):
         cfg = self._load_config()
         if not cfg:
             self.append("[错误] 没有配置文件，请先完成标定并保存。")
+            self._notify("没有配置文件，无法验证：请先在标定页完成 ①②③ 并保存。")
             with self.lock:
                 self.phase = "IDLE"
             return
@@ -546,8 +713,10 @@ class RobotController:
         vmax_joint = float(ex.get("max_joint_vel_rad_s", 0.05))
         min_dur = float(ex.get("min_duration_s", 2.0))
         rate = float(ex.get("rate_hz", 100))
-        kp = float(ex.get("k_p", 2.0))
-        kw = float(ex.get("k_w", 1.0))
+        kp = float(ex.get("k_p", 2.0)) if kp_override is None else float(kp_override)
+        kw = float(ex.get("k_w", 1.0)) if kw_override is None else float(kw_override)
+        if kp_override is not None or kw_override is not None:
+            self.append(f"[方向验证] 使用页面指定增益 K_P={kp} K_W={kw}（覆盖配置默认）")
 
         if joint in ("hip", "thigh", "shank"):
             active = [jt for jt in self.joints if jt["name"] == f"{leg}_{joint}"]
@@ -557,6 +726,7 @@ class RobotController:
             scope = f"方向验证 [{leg}] 各关节 +{deg:.0f}°"
         if not active:
             self.append(f"[错误] 没有匹配的关节: {leg}_{joint or '*'}")
+            self._notify(f"没有匹配的关节：{leg}_{joint or '*'}")
             with self.lock:
                 self.phase = "CONFIGURED"
             return
@@ -594,11 +764,15 @@ class RobotController:
         if bad:
             self.append(f"[拒绝] 有关节无响应：{'，'.join(bad)}；检查接线/电机模式后重试。")
             self.set_status("方向验证被拒绝（有关节无响应）")
+            self._notify("⛔ 方向验证被拒绝：有关节无响应：\n\n" + "，".join(bad)
+                         + "\n\n请检查该腿接线、供电，并确认电机已进入电机模式后重试。")
             with self.lock:
                 self.phase = "CONFIGURED"
             return
         if not targets:
             self.append("[结束] 没有可验证的关节（方向都为 0）。")
+            self._notify("没有可验证的关节：所选关节在配置里方向都为 0（趴↔站几乎不动），无法验证方向。",
+                         level="warn")
             with self.lock:
                 self.phase = "CONFIGURED"
             return
@@ -616,6 +790,7 @@ class RobotController:
         servo = self._spawn_servo(port, kp, kw)
         with self.lock:
             self.servo_procs = {port: servo}
+            self.hold_scope = scope   # 标记电机已锁位保持，供「是否松开」显示
         time.sleep(0.2)
 
         dt = 1.0 / rate
@@ -684,6 +859,9 @@ class RobotController:
             self._start_bg(self._read_current)
             return True, "ok"
 
+        if action == "reload_config":
+            return self._reload_config_now()
+
         if action in ("calib_prone", "calib_stand"):
             if busy or standing:
                 return False, "忙：请等待当前操作完成"
@@ -720,8 +898,17 @@ class RobotController:
             leg = str(p.get("leg", "")).strip().lower()
             if leg not in ("fl", "fr", "rl", "rr"):
                 return False, "腿名必须是 fl/fr/rl/rr"
+            kp = parse_opt_gain(p.get("kp", ""))
+            kw = parse_opt_gain(p.get("kw", ""))
+            if kp == "ERR" or kw == "ERR":
+                return False, "K_P / K_W 必须是数字（留空表示用配置默认值）"
+            skip_verify = str(p.get("skip_verify", "")).strip() in ("1", "true", "True", "on")
+            if skip_verify:
+                self.append("[请求] 「只测这条腿」已勾选『关闭安全校验』，将跳过趴姿偏差检查。")
             self.abort.clear()
-            t = threading.Thread(target=self._do_stand, args=({leg},), daemon=True)
+            t = threading.Thread(target=self._do_stand, args=({leg},),
+                                 kwargs={"kp": kp, "kw": kw, "skip_verify": skip_verify},
+                                 daemon=True)
             with self.lock:
                 self.standing_thread = t
             t.start()
@@ -747,8 +934,13 @@ class RobotController:
             except (TypeError, ValueError):
                 deg = 10.0
             deg = max(1.0, min(30.0, deg))   # 限幅 1~30°，防误填大角度
+            kp = parse_opt_gain(p.get("kp", ""))
+            kw = parse_opt_gain(p.get("kw", ""))
+            if kp == "ERR" or kw == "ERR":
+                return False, "K_P / K_W 必须是数字（留空表示用配置默认值）"
             self.abort.clear()
-            t = threading.Thread(target=self._do_dir_test, args=(leg, deg, joint), daemon=True)
+            t = threading.Thread(target=self._do_dir_test, args=(leg, deg, joint),
+                                 kwargs={"kp": kp, "kw": kw}, daemon=True)
             with self.lock:
                 self.standing_thread = t
             t.start()
@@ -832,18 +1024,44 @@ PAGE = r"""<!DOCTYPE html>
   #status{ flex:1; padding:6px 10px; background:#fff; border:1px solid var(--bd); border-radius:6px; }
   .banner{ display:none; margin:0 0 12px; padding:8px 12px; border-radius:8px; font-size:13px; }
   .banner.bad{ display:block; border:1px solid var(--bad); background:#fde8e8; color:var(--bad); }
+  .banner.hold{ display:block; border:1px solid var(--warn); background:#fff8e1; color:var(--warn); }
+  /* 右上角固定面板：驱动状态 + 大急停按钮（纵向堆叠，占右上空白区，不占整行）*/
+  #driveBar{ position:fixed; top:12px; right:14px; z-index:1000; width:256px;
+    display:flex; flex-direction:column; align-items:stretch; gap:8px;
+    padding:10px; background:rgba(255,255,255,.96); border:1px solid var(--bd); border-radius:10px;
+    box-shadow:0 2px 12px rgba(0,0,0,.18); transition:background .15s ease, border-color .15s ease; }
+  #driveBar.on{ background:#fde8e8; border-color:#d64545; }
+  #driveState{ text-align:center; font-size:28px; font-weight:700; padding:10px 12px; border-radius:9px;
+    white-space:nowrap; background:#e3f4e7; color:#2a8a3e; }
+  #driveBar.on #driveState{ background:#d64545; color:#fff; animation:dpulse 1s steps(1,end) infinite; }
+  @keyframes dpulse{ 50%{ opacity:.45; } }
+  #btnEstop{ width:100%; background:#d64545; color:#fff; border:2px solid #fff; border-radius:8px;
+    font-size:36px; font-weight:800; letter-spacing:1px; line-height:1.25; padding:16px 8px; cursor:pointer;
+    box-shadow:0 1px 4px rgba(0,0,0,.25); }
+  #btnEstop:hover{ background:#bf3a3a; color:#fff; border-color:#fff; }
+  /* 驱动中：整页红色边框警示（不挡点击）*/
+  #driveEdge{ position:fixed; inset:0; border:6px solid #d64545; pointer-events:none; z-index:999; display:none; }
+  #driveEdge.on{ display:block; animation:dpulse 1s steps(1,end) infinite; }
 </style>
 </head>
 <body>
+  <div id="driveBar">
+    <span id="driveState">● 未驱动</span>
+    <button id="btnEstop" type="button" onclick="estopNow()">⏹ 急停<br>STOP</button>
+  </div>
+  <div id="driveEdge"></div>
   <h1>🐕 四足机器人操控 <span class="muted" style="font-size:13px">（站立标定 / 执行）</span></h1>
 
   <div id="warnBanner" class="banner bad"></div>
+  <div id="holdBanner" class="banner"></div>
 
   <fieldset>
     <legend>状态</legend>
     <div class="row">
       <span class="pill" id="phasePill">阶段: -</span>
       <span class="pill" id="cfgPill">配置: -</span>
+      <span class="pill" id="holdPill" title="电机是否仍带电锁位保持（未松开）">松开状态: -</span>
+      <button onclick="api('reload_config')" title="从磁盘重新读取 config/stand_config.json（在 motor_web 标定保存后用它刷新趴姿/站姿）">📂 重新加载配置</button>
       <button class="primary" onclick="api('read')">📐 读取当前 12 关节角</button>
       <span class="grow"></span>
       <button class="estop" onclick="api('estop')">⏹ 急停 / 松开</button>
@@ -889,7 +1107,14 @@ PAGE = r"""<!DOCTYPE html>
         <option value="rl">左后 RL (ttyUSB2 / id 7,8,9)</option>
         <option value="rr">右后 RR (ttyUSB3 / id 10,11,12)</option>
       </select>
+      <label title="位置环刚度。留空=用配置 execute.k_p；越大越硬、力矩越大。范围 0~25.599">K_P</label>
+      <input id="legKp" type="number" min="0" max="25.599" step="0.1" placeholder="默认" style="width:80px; padding:5px 7px; border:1px solid var(--bd); border-radius:6px; font-size:14px">
+      <label title="速度阻尼。留空=用配置 execute.k_w。范围 0~25.599">K_W</label>
+      <input id="legKw" type="number" min="0" max="25.599" step="0.1" placeholder="默认" style="width:80px; padding:5px 7px; border:1px solid var(--bd); border-radius:6px; font-size:14px">
       <button id="btnTestLeg" onclick="confirmTestLeg()">🦵 只测这条腿（趴→站）</button>
+      <label id="skipWrap" title="勾选后『只测这条腿』将跳过『当前是否≈趴姿』的安全校验，直接按 当前角+Δ 运动。危险：若不在趴姿附近会大幅运动！" style="color:#c0392b; font-size:12.5px; user-select:none">
+        <input type="checkbox" id="legSkipVerify" style="vertical-align:middle"> 关闭安全校验
+      </label>
       <span style="width:10px"></span>
       <label>电机</label>
       <select id="dirJoint">
@@ -905,17 +1130,22 @@ PAGE = r"""<!DOCTYPE html>
     </div>
     <p class="muted" style="font-size:12.5px;margin:8px 0 0">
       「趴→站」从趴姿走到站姿（要求当前≈趴姿）；「方向验证」不要求趴姿——选一个电机(hip/thigh/shank)，从当前位置朝配置里的站立方向转设定角度，**一次只驱一个电机**、专门核对该电机方向符号对不对。
+      上面的 <b>K_P / K_W</b> 同时作用于这两个单腿动作：留空则各自沿用配置 <code>execute</code> 里的默认值（输入框灰字即当前默认值）；填了就临时覆盖（不写回配置文件）。调小 K_P 更软更安全，调大更硬跟随更紧。
     </p>
   </fieldset>
 
   <fieldset>
-    <legend>关节角（转子角 rad / 关节角 = 转子角 ÷ 6.33）</legend>
+    <legend>关节角（单位：度°，= 转子角 ÷ 6.33 × 180/π；内部控制/校验仍用转子角 rad）</legend>
     <table>
       <thead><tr>
-        <th>关节</th><th>串口</th><th>ID</th><th>当前(转子)</th><th>趴姿</th><th>站姿</th>
-        <th>Δ(站−趴)</th><th>方向</th><th>校验偏差</th><th>确认/取反</th>
+        <th>关节</th><th>串口</th><th>ID</th><th>当前(°)</th><th>趴姿(°)</th><th>站姿(°)</th>
+        <th>Δ(站−趴,°)</th><th>方向</th><th>校验偏差(°)</th>
+        <th title="实测转子角速度，保持时应≈0；来回跳动=震动">实测ω(rad/s)</th>
+        <th title="实测力矩(N·m)，保持时应为较小常值；大幅摆动=震动">实测τ(N·m)</th>
+        <th title="目标−实测 的跟踪误差(关节°)，保持/运动时应趋近 0">跟踪误差(°)</th>
+        <th>确认/取反</th>
       </tr></thead>
-      <tbody id="jbody"><tr><td colspan="10" class="muted">（点「读取当前 12 关节角」）</td></tr></tbody>
+      <tbody id="jbody"><tr><td colspan="13" class="muted">（点「读取当前 12 关节角」）</td></tr></tbody>
     </table>
   </fieldset>
 
@@ -928,6 +1158,8 @@ PAGE = r"""<!DOCTYPE html>
 
 <script>
   let logIndex = 0;
+  let lastNoticeId = null;   // 已弹过的 notice id；null=尚未建立基线（首次轮询只记基线，不回放旧通知）
+  let lastExecute = null;    // 最近一次 poll 拿到的 execute 配置（含 K_P/K_W 默认值），供 placeholder / 确认框显示
   async function api(action, params){
     params = Object.assign({action}, params||{});
     try{
@@ -936,15 +1168,37 @@ PAGE = r"""<!DOCTYPE html>
       if(!j.ok) alert(j.message||'操作失败');
     }catch(e){ alert('请求失败: '+e); }
   }
+  function estopNow(){ api('estop'); }   // 急停：立即中止动作并松开电机，无需确认
   function confirmSave(){
     if(confirm('将根据已记录的趴姿/站姿计算各关节Δ并写入 stand_config.json？')) api('save_config');
   }
   function confirmStand(){
     if(confirm('确认执行站立？\n\n请确保：机器人已自然趴好、周围无人无障碍、可随时按急停。')) api('stand');
   }
+  // 读单腿验证用的 K_P / K_W：留空则不传，后端沿用配置默认值
+  function legGains(){
+    const g = {};
+    const kp = document.getElementById('legKp').value.trim();
+    const kw = document.getElementById('legKw').value.trim();
+    if (kp !== '') g.kp = kp;
+    if (kw !== '') g.kw = kw;
+    return g;
+  }
+  function gainNote(){
+    const g = legGains();
+    const dk = (lastExecute && gfmt(lastExecute.k_p)) || '配置';
+    const dw = (lastExecute && gfmt(lastExecute.k_w)) || '配置';
+    if (g.kp === undefined && g.kw === undefined)
+      return '增益：用配置默认值（K_P=' + dk + ' K_W=' + dw + '）。';
+    return '增益：K_P=' + (g.kp ?? ('默认'+dk)) + '  K_W=' + (g.kw ?? ('默认'+dw)) + '（覆盖配置）。';
+  }
   function confirmTestLeg(){
     const leg=document.getElementById('legSel').value;
-    if(confirm('只测试 '+leg.toUpperCase()+' 这一条腿（趴→站），其它腿不动。\n\n请确保：机器人已架空、该腿周围无障碍、可随时按急停。')) api('test_leg',{leg});
+    const skip=document.getElementById('legSkipVerify').checked;
+    let msg='只测试 '+leg.toUpperCase()+' 这一条腿（趴→站），其它腿不动。\n'+gainNote();
+    if(skip) msg+='\n\n⚠️⚠️ 已【关闭安全校验】：不检查是否在趴姿，直接按 当前角+Δ 运动。\n若该腿当前离趴姿较远，会发生大幅、可能危险的运动！';
+    msg+='\n\n请确保：机器人已架空、该腿周围无障碍、可随时按急停。';
+    if(confirm(msg)) api('test_leg', Object.assign({leg, skip_verify: skip?1:0}, legGains()));
   }
   function confirmInvert(name){
     if(confirm('取反 '+name+' 的标定方向？\n\n会翻转该电机的 delta_rotor / dir 并写回 stand_config.json。建议取反后再做一次「方向验证」确认。')) api('invert_dir',{name});
@@ -955,12 +1209,20 @@ PAGE = r"""<!DOCTYPE html>
     let deg=parseFloat(document.getElementById('dirDeg').value);
     if(isNaN(deg)||deg<1||deg>30){ alert('角度需在 1~30° 之间'); return; }
     const tgt = (joint==='all') ? (leg.toUpperCase()+' 全部 3 个电机') : (leg.toUpperCase()+'_'+joint+' 这一个电机');
-    if(confirm('方向验证：只驱动 '+tgt+'，从当前位置朝『站立方向』转约 '+deg+'°（不要求趴姿），其它电机不动。\n\n请确保：机器人已架空、该腿周围无障碍、可随时按急停。')) api('dir_test',{leg, joint, deg});
+    if(confirm('方向验证：只驱动 '+tgt+'，从当前位置朝『站立方向』转约 '+deg+'°（不要求趴姿），其它电机不动。\n'+gainNote()+'\n\n请确保：机器人已架空、该腿周围无障碍、可随时按急停。')) api('dir_test', Object.assign({leg, joint, deg}, legGains()));
   }
   const f=(v,n)=>{ if(v===null||v===undefined) return '—'; const x=parseFloat(v); return isNaN(x)?'—':x.toFixed(n); };
+  // 显示用：转子角(rad) -> 关节角(度)。仅换显示单位；校验偏差标红、方向符号等内部判断仍按转子角 rad。
+  const jdeg=(v,gear)=>{ if(v===null||v===undefined) return '—'; const x=parseFloat(v); return isNaN(x)?'—':(x/(gear||6.33)*180/Math.PI).toFixed(2); };
+  // 增益(K_P/K_W)显示：整数补一位小数(2 -> 2.0)，其余原样；非数字返回 null
+  const gfmt=(v)=>{ const x=parseFloat(v); return isNaN(x)?null:(Number.isInteger(x)?x.toFixed(1):String(x)); };
 
   function render(s){
     document.getElementById('phasePill').textContent = '阶段: ' + s.phase;
+    const driving = !!(s.holding || s.standing);
+    document.getElementById('driveState').textContent = driving ? '● 驱动中' : '● 未驱动';
+    document.getElementById('driveBar').classList.toggle('on', driving);
+    document.getElementById('driveEdge').classList.toggle('on', driving);
     const cp=document.getElementById('cfgPill');
     cp.textContent = '配置: ' + (s.configured?'已标定':'未标定');
     cp.className = 'pill ' + (s.configured?'ok':'warn');
@@ -971,7 +1233,35 @@ PAGE = r"""<!DOCTYPE html>
     document.getElementById('btnDirTest').disabled = !s.configured || s.busy || s.standing;
     document.getElementById('status').textContent = s.status;
 
-    const thr = (s.execute && s.execute.verify_threshold_rad) || 0.2;
+    // K_P/K_W 留空时实际生效的是配置 execute 里的默认值；把默认值显示到输入框灰字 placeholder
+    if (s.execute){
+      lastExecute = s.execute;
+      const pk=gfmt(s.execute.k_p), pw=gfmt(s.execute.k_w);
+      document.getElementById('legKp').placeholder = (pk!==null) ? ('默认 '+pk) : '配置';
+      document.getElementById('legKw').placeholder = (pw!==null) ? ('默认 '+pw) : '配置';
+    }
+
+    // 是否松开：后端按 servo 进程是否存活判定（holding=电机仍带电锁位）
+    const holding = !!s.holding;
+    const hp=document.getElementById('holdPill');
+    if (holding && s.standing){ hp.textContent='松开状态: 🔒 电机运行中'; hp.className='pill warn'; }
+    else if (holding){ hp.textContent='松开状态: 🔒 保持锁位（未松开）'; hp.className='pill warn'; }
+    else { hp.textContent='松开状态: 🔓 已松开'; hp.className='pill ok'; }
+    hp.title = holding ? ('电机仍带电锁位'+(s.hold_scope?('：'+s.hold_scope):'')+'；点「急停/松开」释放')
+                       : '电机自由、未上电锁位';
+    // 动作到位但电机仍锁位（未松开）时，给一条醒目横幅 + 就地「松开」按钮
+    const hb=document.getElementById('holdBanner');
+    if (holding && !s.standing){
+      hb.className='banner hold';
+      hb.innerHTML='🔒 动作已到位，电机<b>仍在锁位保持</b>'+(s.hold_scope?('（'+s.hold_scope+'）'):'')
+        +'，<b>尚未松开</b>。检查完毕后请点 '
+        +'<button class="mini" style="margin-left:6px" onclick="api(\'estop\')">🔓 松开电机</button>';
+    } else {
+      hb.className='banner'; hb.innerHTML='';
+    }
+
+    const thr = (s.execute && s.execute.verify_threshold_rad) || 0.2;  // 转子角 rad，与 j.dev 同坐标，仅用于标红
+    const gear = s.gear_ratio || 6.33;
     const tb=document.getElementById('jbody');
     if(!s.joints||!s.joints.length){ } else {
       tb.innerHTML='';
@@ -982,9 +1272,10 @@ PAGE = r"""<!DOCTYPE html>
         const okMark = (j.ok===false)?' <span style="color:var(--bad)">⚠</span>':'';
         tr.innerHTML =
           '<td>'+j.name+'</td><td>'+j.port.replace('/dev/','')+'</td><td>'+j.id+'</td>'+
-          '<td>'+f(j.current,4)+okMark+'</td><td>'+f(j.prone,4)+'</td><td>'+f(j.stand,4)+'</td>'+
-          '<td>'+(j.delta>=0?'+':'')+f(j.delta,4)+'</td><td>'+dir+'</td>'+
-          '<td class="'+(devBad?'bad':'')+'">'+f(j.dev,4)+'</td>'+
+          '<td>'+jdeg(j.current,gear)+okMark+'</td><td>'+jdeg(j.prone,gear)+'</td><td>'+jdeg(j.stand,gear)+'</td>'+
+          '<td>'+(j.delta>=0?'+':'')+jdeg(j.delta,gear)+'</td><td>'+dir+'</td>'+
+          '<td class="'+(devBad?'bad':'')+'">'+jdeg(j.dev,gear)+'</td>'+
+          '<td>'+f(j.fb_vel,3)+'</td><td>'+f(j.fb_tau,3)+'</td><td>'+f(j.fb_errd,2)+'</td>'+
           '<td>'+
           (j.verified
             ? '<span style="color:var(--ok)">✅</span> <button class="mini" title="撤销确认，恢复待验证" onclick="api(\'unconfirm_dir\',{name:\''+j.name+'\'})">↩取消确认</button>'
@@ -1010,6 +1301,10 @@ PAGE = r"""<!DOCTYPE html>
         if(atBottom) log.scrollTop=log.scrollHeight;
       }
       logIndex=s.log_index;
+      // 后台线程的拒绝/异常通过 notice 通道弹窗（首次轮询只记基线，避免回放旧通知）
+      const nid = s.notice ? s.notice.id : 0;
+      if (lastNoticeId === null) lastNoticeId = nid;
+      else if (s.notice && nid !== lastNoticeId){ lastNoticeId = nid; alert(s.notice.text); }
       render(s);
     }catch(e){}
   }

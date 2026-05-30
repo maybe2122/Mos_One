@@ -44,8 +44,28 @@ SWMOTOR = os.path.join(TOOL_DIR, "swmotor")
 
 SUDO_PASSWORD = "1"
 DEFAULT_SPEED = 0.1
+# 本机共 12 个电机，从 1 开始编号，合法单播 ID 为 1~12（手册 ID 15 为广播地址，单播无返回）。
+MIN_MOTOR_ID = 1
+MAX_MOTOR_ID = 12
 NEED_SUDO = os.geteuid() != 0
 MAX_LOG = 4000  # 日志缓冲最多保留的行数
+
+# GO-M8010-6 减速比：转子角 = 关节角 * 6.33（与 motor_ctrl.cpp 一致）
+GEAR_RATIO = 6.33
+# --- 位置控制（平滑位置环，与 example/main.cpp 的位置控制一致）---
+# 调用 motor_ctrl <port> <id> moveto <角度°> <关节速度> <kp> <kw>：先读当前位置当
+# 起点，目标位置按速度平滑递增（轨迹），K_P 跟位置 + K_W 阻尼 + 速度前馈，
+# 到位后保持；点「停止」时进程收到 SIGTERM，退出前自动松力。
+# 低速也丝滑：力矩主要来自 K_P×位置误差（编码器位置干净），而非低速时又糙又跳的速度估计。
+POS_MAX_DEG = 90.0       # 单次相对转动最大角度（关节°），防止误填过大
+POS_VEL_DEFAULT = 0.5     # 关节角速度默认 (rad/s)，越小越慢越稳
+POS_VEL_MAX = 5.0         # 关节角速度上限 (rad/s)，防止误填过快
+POS_KP_DEFAULT = 2.0      # 位置环刚度，越大越"硬"跟得越紧（抖就调小）
+POS_KP_MAX = 25.0         # K_P 上限（手册 0~25.599）
+POS_KW_DEFAULT = 0.1      # 速度阻尼，抑制抖动（嗡鸣就调小）
+POS_KW_MAX = 25.0         # K_W 上限（手册 0~25.599）
+POS_T_DEFAULT = 0.0       # 力矩前馈（转子 N·m，可正负），常驻施加，补偿重力/负载
+POS_T_MAX = 3.0           # 力矩前馈幅值上限（防止误填过大力矩损坏电机/越限位）
 
 # --- 姿态标定 / 配置文件 ---
 CONFIG_DIR = os.path.normpath(
@@ -152,7 +172,9 @@ class Controller:
         self.dropped = 0          # 已被丢弃（截断）的日志行数，用于 since 偏移
         self.busy = False         # 前台短命令是否在跑
         self.cmd_proc = None      # 当前前台子进程（供取消）
-        self.drive_proc = None    # 持续运行的驱动子进程
+        self.drive_proc = None    # 持续运行的驱动子进程（速度驱动 / 位置计时驱动共用）
+        self.drive_port = ""      # 当前驱动的串口（供急停补发停止脉冲）
+        self.drive_id = None      # 当前驱动的电机 id（供急停补发停止脉冲）
         self.cancel = threading.Event()
         self.detected_ids = []
         self.angles = []
@@ -554,13 +576,32 @@ class Controller:
                     f"（{n_full}/{len(out_joints)} 个关节含完整 趴+站 方向）")
         return True, STAND_CONFIG_PATH
 
+    # -- 读取磁盘上已保存的 stand_config.json（供前端只读展示） --
+    def read_saved_config(self):
+        if not os.path.isfile(STAND_CONFIG_PATH):
+            return {"exists": False, "path": STAND_CONFIG_PATH}
+        try:
+            with open(STAND_CONFIG_PATH, encoding="utf-8") as f:
+                cfg = json.load(f)
+        except (OSError, ValueError) as e:
+            return {"exists": True, "path": STAND_CONFIG_PATH, "error": str(e)}
+        try:
+            mtime = time.strftime("%Y-%m-%d %H:%M:%S",
+                                  time.localtime(os.path.getmtime(STAND_CONFIG_PATH)))
+        except OSError:
+            mtime = ""
+        return {"exists": True, "path": STAND_CONFIG_PATH, "mtime": mtime, "config": cfg}
+
     # -- 驱动 / 停止 --
     def _drive(self, port, mid, speed):
+        # 完全沿用 main.cpp：mode=1, K_P=0, K_W=0.05, T=0，只设速度 W=speed。
+        # speed 为电机【转子】转速(rad/s)，直接写入 cmd.W；输出端转速 = speed/6.33。
+        # duration=0 表示一直转到点「停止」。K_W=0.05 偏小，低速力矩小转不动时调大转速。
         cmd = [MOTOR_CTRL, port, str(mid), "drive", f"{speed}", "0"]
         shown = (["sudo"] + cmd) if NEED_SUDO else cmd
         self.append("\n" + "=" * 60)
-        self.append(f"[驱动 id={mid} speed={speed}]  $ {' '.join(shown)}")
-        self.set_status(f"驱动中: id={mid} speed={speed}")
+        self.append(f"[驱动 id={mid} 转子转速={speed} rad/s]  $ {' '.join(shown)}")
+        self.set_status(f"驱动中: id={mid} speed={speed} rad/s")
         try:
             proc = self._spawn(cmd)
         except FileNotFoundError as e:
@@ -569,6 +610,8 @@ class Controller:
             return
         with self.lock:
             self.drive_proc = proc
+            self.drive_port = port
+            self.drive_id = mid
         threading.Thread(target=self._drive_reader, args=(proc,), daemon=True).start()
 
     def _drive_reader(self, proc):
@@ -579,6 +622,34 @@ class Controller:
         with self.lock:
             self.drive_proc = None
         self.set_status("驱动已停止")
+
+    # -- 位置控制：平滑转动指定角度（调用 motor_ctrl moveto，逻辑同 main.cpp）--
+    def _position(self, port, mid, deg, vel, kp, kw, t_ff, on_arrive):
+        """从当前位置平滑转动 deg(关节角，正/负=正/反转)，关节速度 vel(rad/s)。
+
+        交给 motor_ctrl moveto：读当前位置当起点→目标按速度平滑递增→K_P 跟位置 +
+        K_W 阻尼 + 速度前馈 + 力矩前馈 t_ff。on_arrive 控制到位后行为：
+          release=松力退出 / hold=持续保持(点停止才退) / keep=保留命令退出不松力。
+        长驻进程，按 drive_proc 跟踪，复用「停止」逻辑（停止一律松力）。
+        """
+        cmd = [MOTOR_CTRL, port, str(mid), "moveto",
+               f"{deg}", f"{vel}", f"{kp}", f"{kw}", f"{t_ff}", on_arrive]
+        shown = (["sudo"] + cmd) if NEED_SUDO else cmd
+        self.append("\n" + "=" * 60)
+        self.append(f"[位置控制 id={mid} 角度={deg:+.1f}°(关节) 速度={vel} rad/s "
+                    f"K_P={kp} K_W={kw} T前馈={t_ff} 到位={on_arrive}]  $ {' '.join(shown)}")
+        self.set_status(f"位置控制: id={mid} 平滑转动 {deg:+.1f}°（到位={on_arrive}）")
+        try:
+            proc = self._spawn(cmd)
+        except FileNotFoundError as e:
+            self.append(f"[错误] {e}")
+            self.set_status("位置控制失败")
+            return
+        with self.lock:
+            self.drive_proc = proc
+            self.drive_port = port
+            self.drive_id = mid
+        threading.Thread(target=self._drive_reader, args=(proc,), daemon=True).start()
 
     def _stop(self, port, mid):
         with self.lock:
@@ -608,6 +679,40 @@ class Controller:
         with self.lock:
             self.drive_proc = None
         self.set_status("驱动已停止")
+
+    # -- 急停：立即停止驱动（不依赖 UI 选择，随时可用）--
+    def _estop(self):
+        self.append("\n[急停] 立即停止电机驱动 ...")
+        self.set_status("急停中")
+        self.cancel.set()                      # 让可能在跑的前台命令循环尽快退出
+        with self.lock:
+            proc = self.drive_proc
+            port, mid = self.drive_port, self.drive_id
+        if proc is not None and proc.poll() is None:
+            self.append("[急停] 终止驱动子进程 ...")
+            try:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+            except Exception as e:
+                self.append(f"[警告] 终止驱动失败: {e}")
+        # 补一段 mode=0 停止脉冲，确保电机真正停下（用驱动时记录的 port/id）
+        if port and mid is not None:
+            cmd = [MOTOR_CTRL, port, str(mid), "stop", "500"]
+            self.append(f"[急停] 停止脉冲 id={mid} @ {port}")
+            try:
+                p = self._spawn(cmd)
+                for line in p.stdout:
+                    self.append(line.rstrip("\n"))
+                p.wait()
+            except FileNotFoundError as e:
+                self.append(f"[错误] {e}")
+        with self.lock:
+            self.drive_proc = None
+        self.set_status("急停：驱动已停止")
+        self.append("[急停] 完成。")
 
     # -- 取消 --
     def _cancel(self):
@@ -653,9 +758,13 @@ class Controller:
             busy = self.busy
             driving = self.drive_proc is not None and self.drive_proc.poll() is None
 
+        if action == "estop":   # 急停随时可用：不校验 busy/driving/port
+            threading.Thread(target=self._estop, daemon=True).start()
+            return True, "ok"
+
         fg = ("change_id", "switch_motor", "switch_motor_all",
               "read_angles", "scan_read")
-        if action in fg or action == "drive":
+        if action in fg or action in ("drive", "position"):
             if self.continuous:
                 return False, "持续读取中：请先点「停止持续读取」"
             if busy:
@@ -696,8 +805,8 @@ class Controller:
                            f"修改电机 ID: {old} -> {new}", False, False, True)
         elif action == "read_angles":
             target = str(p.get("target", "all")).strip()
-            if target != "all" and (not target.isdigit() or not 0 <= int(target) <= 15):
-                return False, "电机 ID 必须在 0~15（或用 all）"
+            if target != "all" and (not target.isdigit() or not MIN_MOTOR_ID <= int(target) <= MAX_MOTOR_ID):
+                return False, f"电机 ID 必须在 {MIN_MOTOR_ID}~{MAX_MOTOR_ID}（或用 all）"
             if not os.path.isfile(MOTOR_CTRL):
                 return False, f"未找到 {MOTOR_CTRL}"
             if self.factory_mode:
@@ -708,8 +817,8 @@ class Controller:
                            title, False, True)
         elif action == "drive":
             mid = str(p.get("id", "")).strip()
-            if not mid.isdigit() or not 0 <= int(mid) <= 15:
-                return False, "电机 ID 必须在 0~15"
+            if not mid.isdigit() or not MIN_MOTOR_ID <= int(mid) <= MAX_MOTOR_ID:
+                return False, f"电机 ID 必须在 {MIN_MOTOR_ID}~{MAX_MOTOR_ID}"
             try:
                 speed = float(p.get("speed", DEFAULT_SPEED))
             except (TypeError, ValueError):
@@ -718,10 +827,55 @@ class Controller:
                 return False, f"未找到 {MOTOR_CTRL}"
             threading.Thread(target=self._drive, args=(port, mid, speed),
                              daemon=True).start()
+        elif action == "position":
+            mid = str(p.get("id", "")).strip()
+            if not mid.isdigit() or not MIN_MOTOR_ID <= int(mid) <= MAX_MOTOR_ID:
+                return False, f"电机 ID 必须在 {MIN_MOTOR_ID}~{MAX_MOTOR_ID}"
+            try:
+                deg = float(p.get("deg", ""))
+            except (TypeError, ValueError):
+                return False, "转动角度必须是数字（°，正/负=正/反转）"
+            if deg == 0:
+                return False, "转动角度不能为 0"
+            if abs(deg) > POS_MAX_DEG:
+                return False, f"转动角度过大（|deg| 须 ≤ {POS_MAX_DEG:.0f}°），防止误填"
+            try:
+                vel = float(p.get("vel", POS_VEL_DEFAULT))
+            except (TypeError, ValueError):
+                return False, "速度必须是数字（关节 rad/s）"
+            if not 0 < vel <= POS_VEL_MAX:
+                return False, f"速度须在 0~{POS_VEL_MAX:.1f} 关节 rad/s 之间"
+            try:
+                kp = float(p.get("kp", POS_KP_DEFAULT))
+            except (TypeError, ValueError):
+                return False, "刚度 K_P 必须是数字"
+            if not 0 <= kp <= POS_KP_MAX:
+                return False, f"刚度 K_P 须在 0~{POS_KP_MAX:.1f} 之间"
+            try:
+                kw = float(p.get("kw", POS_KW_DEFAULT))
+            except (TypeError, ValueError):
+                return False, "阻尼 K_W 必须是数字"
+            if not 0 <= kw <= POS_KW_MAX:
+                return False, f"阻尼 K_W 须在 0~{POS_KW_MAX:.1f} 之间"
+            try:
+                t_ff = float(p.get("t", POS_T_DEFAULT))
+            except (TypeError, ValueError):
+                return False, "力矩前馈 T 必须是数字"
+            if abs(t_ff) > POS_T_MAX:
+                return False, f"力矩前馈 |T| 须 ≤ {POS_T_MAX:.1f} N·m（转子侧），防止力矩过大"
+            on_arrive = str(p.get("arrive", "release")).strip()
+            if on_arrive not in ("release", "hold", "keep"):
+                return False, "到位行为只能是 release/hold/keep"
+            if not os.path.isfile(MOTOR_CTRL):
+                return False, f"未找到 {MOTOR_CTRL}"
+            threading.Thread(
+                target=self._position,
+                args=(port, int(mid), deg, vel, kp, kw, t_ff, on_arrive),
+                daemon=True).start()
         elif action == "stop":
             mid = str(p.get("id", "")).strip()
-            if not mid.isdigit() or not 0 <= int(mid) <= 15:
-                return False, "电机 ID 必须在 0~15"
+            if not mid.isdigit() or not MIN_MOTOR_ID <= int(mid) <= MAX_MOTOR_ID:
+                return False, f"电机 ID 必须在 {MIN_MOTOR_ID}~{MAX_MOTOR_ID}"
             threading.Thread(target=self._stop, args=(port, mid), daemon=True).start()
         elif action == "cont_start":
             ports = list_ttyusb_ports()
@@ -818,9 +972,31 @@ PAGE = """<!DOCTYPE html>
   #statusbar { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
   #status { flex: 1; padding: 6px 10px; background: #fff; border: 1px solid var(--bd); border-radius: 6px; }
   .pill { font-size: 12px; padding: 2px 8px; border-radius: 10px; background: #eee; color: #555; }
+  /* 右上角固定面板：驱动状态 + 大急停按钮（纵向堆叠，占右上空白区，不占整行）*/
+  #driveBar{ position:fixed; top:12px; right:14px; z-index:1000; width:128px;
+    display:flex; flex-direction:column; align-items:stretch; gap:8px;
+    padding:10px; background:rgba(255,255,255,.96); border:1px solid var(--bd); border-radius:10px;
+    box-shadow:0 2px 12px rgba(0,0,0,.18); transition:background .15s ease, border-color .15s ease; }
+  #driveBar.on{ background:#fde8e8; border-color:#d64545; }
+  #driveState{ text-align:center; font-size:14px; font-weight:700; padding:6px 8px; border-radius:9px;
+    white-space:nowrap; background:#e3f4e7; color:#2a8a3e; }
+  #driveBar.on #driveState{ background:#d64545; color:#fff; animation:dpulse 1s steps(1,end) infinite; }
+  @keyframes dpulse{ 50%{ opacity:.45; } }
+  #btnEstop{ width:100%; background:#d64545; color:#fff; border:2px solid #fff; border-radius:8px;
+    font-size:18px; font-weight:800; letter-spacing:1px; line-height:1.25; padding:16px 8px; cursor:pointer;
+    box-shadow:0 1px 4px rgba(0,0,0,.25); }
+  #btnEstop:hover{ background:#bf3a3a; color:#fff; border-color:#fff; }
+  /* 驱动中：整页红色边框警示（不挡点击）*/
+  #driveEdge{ position:fixed; inset:0; border:6px solid #d64545; pointer-events:none; z-index:999; display:none; }
+  #driveEdge.on{ display:block; animation:dpulse 1s steps(1,end) infinite; }
 </style>
 </head>
 <body>
+  <div id="driveBar">
+    <span id="driveState">● 未驱动</span>
+    <button id="btnEstop" type="button" onclick="estopNow()">⏹ 急停<br>STOP</button>
+  </div>
+  <div id="driveEdge"></div>
   <h1>GO-M8010-6 电机管理 <span class="muted" style="font-size:13px">（网页版）</span></h1>
 
   <div id="factoryWarn" style="display:none; margin:0 0 12px; padding:8px 12px;
@@ -858,20 +1034,48 @@ PAGE = """<!DOCTYPE html>
     <legend>电机控制（需电机已处于电机模式）</legend>
     <div class="row">
       <label>电机 ID</label><select id="driveId"></select>
-      <label>转速 (rad/s)</label><input id="speed" type="number" step="0.001" value="0.1">
+      <label title="电机【转子】转速 W（同 main.cpp）；输出端转速 = 此值 / 6.33。K_W 固定 0.05，转不动就调大此值">转子转速 W (rad/s)</label><input id="speed" type="number" step="0.1" value="6.28">
       <button class="action primary" onclick="doDrive()">▶ 驱动转动</button>
       <button id="btnStop" class="danger" onclick="doStop()" disabled>■ 停止</button>
       <span style="width:16px"></span>
       <button class="action" onclick="api('read_angles', {target:'all'})">📐 读取所有角度</button>
       <button class="action" onclick="api('read_angles', {target: document.getElementById('driveId').value})">读取选中 ID 角度</button>
     </div>
+    <div class="row" style="margin-top:8px; border-top:1px dashed var(--bd); padding-top:8px">
+      <label>位置控制：转动角度 (°)</label>
+      <input id="posDeg" type="number" step="1" value="90" title="要转动的输出端关节角（相对当前位置）；正=正转，负=反转">
+      <label title="关节角速度，决定多快走完轨迹；越小越慢越稳">速度 (rad/s)</label>
+      <input id="posVel" type="number" step="0.1" value="0.5" style="width:80px">
+      <label title="位置环刚度，越大越硬跟得越紧；抖动就调小（0~25.6）">刚度 K_P</label>
+      <input id="posKp" type="number" step="0.5" value="2" style="width:64px">
+      <label title="速度阻尼，抑制抖动；嗡鸣就调小（0~25.6）">阻尼 K_W</label>
+      <input id="posKw" type="number" step="0.1" value="0.1" style="width:64px">
+      <label title="力矩前馈（转子 N·m，可正负），常驻施加，可补偿重力/负载；0=不用">力矩 T</label>
+      <input id="posT" type="number" step="0.05" value="0" style="width:64px">
+      <label title="到位后行为：松力退出/持续保持/保留命令退出">到位后</label>
+      <select id="posArrive" style="width:150px">
+        <option value="release" selected>松力退出（默认）</option>
+        <option value="hold">持续保持（点停止才退）</option>
+        <option value="keep">保留命令退出（不松力）</option>
+      </select>
+      <button class="action primary" onclick="doPosition()" title="平滑位置控制（同 main.cpp）：读当前位置→按速度平滑转动到目标→按「到位后」处理（默认松力退出）">↻ 平滑转动 (相对)</button>
+    </div>
+    <div class="muted" style="font-size:12.5px; margin-top:6px">
+      角度为<b>输出端关节角</b>（=转子角/6.33），相对当前位置，正=正转、负=反转。
+      平滑位置控制（同 <code>main.cpp</code>）：读当前位置当起点 → 目标按速度平滑递增 →
+      <code>K_P</code> 跟位置 + <code>K_W</code> 阻尼 + 速度前馈，到位后按下方「到位后」处理；点上方「■ 停止」随时中止并松力。
+      <br>低速也丝滑。若<b>转动中抖</b>：调小 K_P；若<b>到位后嗡鸣</b>：调小 K_W；想更稳就减小速度。
+      <b>力矩 T</b> 为转子侧前馈力矩（常驻、可正负），用于补偿重力/负载，0 即不用（幅值已限 ±3 N·m）。
+      <br><b>到位后</b>：默认<b>松力退出</b>（电机松开，适合空载/测试）；要撑住负载选<b>持续保持</b>；
+      <b>保留命令退出</b>则停发但不松力。注意：无论哪种，点「■ 停止」都会松力。
+    </div>
   </fieldset>
 
   <fieldset>
-    <legend>电机角度（read 读取，不驱动电机；关节角 = 转子角 / 6.33）</legend>
+    <legend>电机角度（read 读取，不驱动电机；显示输出端关节角，单位：度° = 转子角 / 6.33 × 180/π）</legend>
     <table>
       <thead><tr>
-        <th>ID</th><th>关节 (rad)</th><th>关节 (°)</th><th>转子 (rad)</th><th>温度 ℃</th><th>错误码</th>
+        <th>ID</th><th>关节角 (°)</th><th>温度 ℃</th><th>错误码</th>
       </tr></thead>
       <tbody id="angleBody">
         <tr><td colspan="6" class="muted">（暂无数据，点「读取所有角度」）</td></tr>
@@ -888,6 +1092,7 @@ PAGE = """<!DOCTYPE html>
       <button class="calib" onclick="api('capture_stand')">② 记录站姿</button>
       <span style="width:8px"></span>
       <button class="calib" onclick="api('save_config')">💾 保存 stand_config.json</button>
+      <button class="calib" onclick="loadSavedConfig()">📂 读取已保存配置</button>
       <span class="muted" style="font-size:13px">流程：开「持续读取」→ 摆趴姿点①→ 摆站姿点②→ 保存</span>
     </div>
     <div class="muted" style="font-size:12.5px; margin:6px 0 8px">
@@ -903,6 +1108,24 @@ PAGE = """<!DOCTYPE html>
         <tr><td colspan="7" class="muted">（加载 joint_map 中…）</td></tr>
       </tbody>
     </table>
+
+    <div id="savedCfgWrap" style="margin-top:12px; display:none">
+      <div style="font-weight:600; color:#555; margin-bottom:4px">已保存的 stand_config.json</div>
+      <div id="savedCfgHead" class="muted" style="font-size:12.5px; margin-bottom:6px"></div>
+      <table id="savedCfgTable">
+        <thead><tr>
+          <th>关节</th><th>ID</th><th>趴姿 (°)</th><th>站姿 (°)</th>
+          <th>Δ关节 (°)</th><th>标定方向</th><th>已验证</th>
+        </tr></thead>
+        <tbody id="savedCfgBody"></tbody>
+      </table>
+      <details style="margin-top:6px">
+        <summary class="muted" style="font-size:12.5px; cursor:pointer">原始 JSON</summary>
+        <pre id="savedCfgRaw" style="max-height:240px; overflow:auto; margin:6px 0 0;
+             padding:8px 10px; background:#1e1e1e; color:#e0e0e0; border-radius:6px;
+             font-size:12px; line-height:1.45; white-space:pre-wrap; word-break:break-all"></pre>
+      </details>
+    </div>
   </fieldset>
 
   <p class="tip">
@@ -922,11 +1145,16 @@ PAGE = """<!DOCTYPE html>
   </div>
 
 <script>
-  // 0~15 填充三个 ID 下拉框
-  for (const sid of ['oldId','newId','driveId']) {
-    const sel = document.getElementById(sid);
-    for (let i=0;i<16;i++){ const o=document.createElement('option'); o.value=i; o.textContent=i; sel.appendChild(o); }
+  // 填充 ID 下拉框：驱动/读取用 MIN~MAX_MOTOR_ID（本机电机 1~12）；
+  // 改 ID 仍允许 0~15，因为出厂未设 ID 的电机会以 15 出现（手册 §6.3）。
+  const MIN_MOTOR_ID = __MIN_MOTOR_ID__;
+  const MAX_MOTOR_ID = __MAX_MOTOR_ID__;
+  function fillIds(sel, minId, maxId){
+    for (let i=minId;i<=maxId;i++){ const o=document.createElement('option'); o.value=i; o.textContent=i; sel.appendChild(o); }
   }
+  fillIds(document.getElementById('oldId'), 0, 15);
+  fillIds(document.getElementById('newId'), 0, 15);
+  fillIds(document.getElementById('driveId'), MIN_MOTOR_ID, MAX_MOTOR_ID);
   document.getElementById('oldId').value = '0';
   document.getElementById('newId').value = '1';
 
@@ -944,6 +1172,47 @@ PAGE = """<!DOCTYPE html>
     updateCalib({});
   }
   function toggleCont(){ api(contOn ? 'cont_stop' : 'cont_start'); }
+
+  // 读取并显示磁盘上已保存的 stand_config.json（只读展示，不影响当前标定状态）
+  async function loadSavedConfig(){
+    let j;
+    try{
+      const r = await fetch('/api/standconfig'); j = await r.json();
+    }catch(e){ alert('读取失败: ' + e); return; }
+    const wrap = document.getElementById('savedCfgWrap');
+    const head = document.getElementById('savedCfgHead');
+    const body = document.getElementById('savedCfgBody');
+    const raw  = document.getElementById('savedCfgRaw');
+    wrap.style.display = '';
+    if (!j.exists){
+      head.textContent = '尚未保存：' + (j.path || 'stand_config.json') + '（先点「💾 保存」生成）';
+      body.innerHTML = ''; raw.textContent = ''; return;
+    }
+    if (j.error){
+      head.textContent = '读取失败：' + j.error + '（' + (j.path||'') + '）';
+      body.innerHTML = ''; raw.textContent = ''; return;
+    }
+    const cfg = j.config || {};
+    head.textContent = '机器人=' + (cfg.robot||'—') + '  减速比=' + (cfg.gear_ratio||'—') +
+                       '  生成于=' + (cfg._generated || j.mtime || '—') +
+                       '  关节数=' + ((cfg.joints||[]).length) + '  文件=' + (j.path||'');
+    const f2 = (v,n) => (v===null||v===undefined||v==='') ? '<span class="muted">—</span>' : Number(v).toFixed(n);
+    const gear = cfg.gear_ratio || 6.33;
+    const f2d = (rad,n) => (rad===null||rad===undefined||rad==='') ? '<span class="muted">—</span>' : Number(rad/gear*180/Math.PI).toFixed(n);  // 转子rad -> 关节度
+    const dirCell = d => d===1 ? '<span style="color:var(--pri);font-weight:600">＋</span>'
+                       : d===-1 ? '<span style="color:#d64545;font-weight:600">－</span>'
+                       : d===0 ? '<span class="muted">·</span>' : '<span class="muted">—</span>';
+    const verCell = v => v===true ? '✓' : v===false ? '<span style="color:#d64545">✗</span>' : '<span class="muted">—</span>';
+    let html = '';
+    for (const jt of (cfg.joints||[])){
+      html += '<tr><td>'+(jt.name||'')+'</td><td>'+(jt.id??'')+'</td>'+
+              '<td>'+f2(jt.prone_deg,2)+'</td><td>'+f2(jt.stand_deg,2)+'</td>'+
+              '<td>'+f2d(jt.delta_rotor,2)+'</td><td>'+dirCell(jt.dir)+'</td>'+
+              '<td>'+verCell(jt.verified)+'</td></tr>';
+    }
+    body.innerHTML = html || '<tr><td colspan="7" class="muted">（配置里没有 joints）</td></tr>';
+    raw.textContent = JSON.stringify(cfg, null, 2);
+  }
 
   async function refreshPorts(){
     try{
@@ -977,6 +1246,18 @@ PAGE = """<!DOCTYPE html>
   }
   function doDrive(){ api('drive', {id: document.getElementById('driveId').value, speed: document.getElementById('speed').value}); }
   function doStop(){ api('stop', {id: document.getElementById('driveId').value}); }
+  function estopNow(){ api('estop'); }   // 急停：立即停止驱动，无需确认
+  function doPosition(){
+    api('position', {
+      id:  document.getElementById('driveId').value,
+      deg: document.getElementById('posDeg').value,
+      vel: document.getElementById('posVel').value,
+      kp:  document.getElementById('posKp').value,
+      kw:  document.getElementById('posKw').value,
+      t:   document.getElementById('posT').value,
+      arrive: document.getElementById('posArrive').value,
+    });
+  }
 
   function updateButtons(s){
     // 持续读取期间也锁住普通操作（标定按钮 .calib 不受影响，便于记录/停止）
@@ -989,6 +1270,10 @@ PAGE = """<!DOCTYPE html>
     const bc = document.getElementById('btnCont');
     bc.textContent = contOn ? '■ 停止持续读取' : '▶ 持续读取';
     bc.classList.toggle('danger', contOn);
+    const driving = !!s.driving;
+    document.getElementById('driveState').textContent = driving ? '● 驱动中' : '● 未驱动';
+    document.getElementById('driveBar').classList.toggle('on', driving);
+    document.getElementById('driveEdge').classList.toggle('on', driving);
   }
 
   function updateDetected(ids){
@@ -1016,15 +1301,15 @@ PAGE = """<!DOCTYPE html>
   function updateAngles(rows){
     const tb = document.getElementById('angleBody');
     if (!rows || !rows.length){
-      tb.innerHTML = '<tr><td colspan="6" class="muted">（暂无数据，点「读取所有角度」）</td></tr>';
+      tb.innerHTML = '<tr><td colspan="4" class="muted">（暂无数据，点「读取所有角度」）</td></tr>';
       return;
     }
     const f = (v,n) => { const x = parseFloat(v); return isNaN(x) ? '—' : x.toFixed(n); };
     tb.innerHTML = '';
     for (const r of rows){
       const tr = document.createElement('tr');
-      tr.innerHTML = '<td>'+r.id+'</td><td>'+f(r.joint,4)+'</td><td>'+f(r.deg,2)+
-                     '</td><td>'+f(r.rotor,4)+'</td><td>'+(r.temp||'—')+'</td><td>'+(r.err||'—')+'</td>';
+      tr.innerHTML = '<td>'+r.id+'</td><td>'+f(r.deg,2)+'</td>'+
+                     '<td>'+(r.temp||'—')+'</td><td>'+(r.err||'—')+'</td>';
       tb.appendChild(tr);
     }
   }
@@ -1118,11 +1403,15 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         if u.path in ("/", "/index.html"):
-            self._send(PAGE.encode("utf-8"), "text/html; charset=utf-8")
+            html = (PAGE.replace("__MIN_MOTOR_ID__", str(MIN_MOTOR_ID))
+                        .replace("__MAX_MOTOR_ID__", str(MAX_MOTOR_ID)))
+            self._send(html.encode("utf-8"), "text/html; charset=utf-8")
         elif u.path == "/api/ports":
             self._json({"ports": list_serial_ports()})
         elif u.path == "/api/jointmap":
             self._json(CTRL.joint_map or {})
+        elif u.path == "/api/standconfig":
+            self._json(CTRL.read_saved_config())
         elif u.path == "/api/state":
             q = parse_qs(u.query)
             try:

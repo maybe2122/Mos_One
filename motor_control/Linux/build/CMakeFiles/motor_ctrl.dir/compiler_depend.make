@@ -257,6 +257,17 @@ CMakeFiles/motor_ctrl.dir/example/motor_ctrl.cpp.o: ../example/motor_ctrl.cpp \
   /usr/include/c++/9/limits \
   /usr/include/c++/9/ctime \
   /usr/include/c++/9/bits/parse_numbers.h \
+  /usr/include/c++/9/cmath \
+  /usr/include/math.h \
+  /usr/include/x86_64-linux-gnu/bits/math-vector.h \
+  /usr/include/x86_64-linux-gnu/bits/libm-simd-decl-stubs.h \
+  /usr/include/x86_64-linux-gnu/bits/flt-eval-method.h \
+  /usr/include/x86_64-linux-gnu/bits/fp-logb.h \
+  /usr/include/x86_64-linux-gnu/bits/fp-fast.h \
+  /usr/include/x86_64-linux-gnu/bits/mathcalls-helper-functions.h \
+  /usr/include/x86_64-linux-gnu/bits/mathcalls.h \
+  /usr/include/x86_64-linux-gnu/bits/mathcalls-narrow.h \
+  /usr/include/x86_64-linux-gnu/bits/iscanonical.h \
   /usr/include/c++/9/csignal \
   /usr/include/signal.h \
   /usr/include/x86_64-linux-gnu/bits/signum-generic.h \
@@ -279,8 +290,57 @@ CMakeFiles/motor_ctrl.dir/example/motor_ctrl.cpp.o: ../example/motor_ctrl.cpp \
   /usr/include/x86_64-linux-gnu/bits/ss_flags.h \
   /usr/include/x86_64-linux-gnu/bits/types/struct_sigstack.h \
   /usr/include/x86_64-linux-gnu/bits/sigthread.h \
-  /usr/include/x86_64-linux-gnu/bits/signal_ext.h
+  /usr/include/x86_64-linux-gnu/bits/signal_ext.h \
+  /usr/include/c++/9/map \
+  /usr/include/c++/9/bits/stl_tree.h \
+  /usr/include/c++/9/ext/aligned_buffer.h \
+  /usr/include/c++/9/bits/stl_map.h \
+  /usr/include/c++/9/tuple \
+  /usr/include/c++/9/utility \
+  /usr/include/c++/9/bits/stl_relops.h \
+  /usr/include/c++/9/array \
+  /usr/include/c++/9/bits/uses_allocator.h \
+  /usr/include/c++/9/bits/invoke.h \
+  /usr/include/c++/9/bits/stl_multimap.h \
+  /usr/include/c++/9/bits/erase_if.h \
+  /usr/include/c++/9/mutex \
+  /usr/include/c++/9/bits/std_mutex.h \
+  /usr/include/c++/9/bits/unique_lock.h \
+  /usr/include/c++/9/thread \
+  /usr/include/c++/9/memory \
+  /usr/include/c++/9/bits/stl_tempbuf.h \
+  /usr/include/c++/9/bits/stl_raw_storage_iter.h \
+  /usr/include/c++/9/ext/concurrence.h \
+  /usr/include/c++/9/bits/unique_ptr.h \
+  /usr/include/c++/9/bits/shared_ptr.h \
+  /usr/include/c++/9/bits/shared_ptr_base.h \
+  /usr/include/c++/9/bits/allocated_ptr.h \
+  /usr/include/c++/9/bits/refwrap.h \
+  /usr/include/c++/9/bits/shared_ptr_atomic.h \
+  /usr/include/c++/9/backward/auto_ptr.h
 
+
+/usr/include/c++/9/bits/allocated_ptr.h:
+
+/usr/include/c++/9/bits/unique_ptr.h:
+
+/usr/include/c++/9/ext/concurrence.h:
+
+/usr/include/c++/9/bits/erase_if.h:
+
+/usr/include/c++/9/bits/stl_multimap.h:
+
+/usr/include/c++/9/bits/invoke.h:
+
+/usr/include/c++/9/bits/uses_allocator.h:
+
+/usr/include/c++/9/array:
+
+/usr/include/c++/9/bits/stl_relops.h:
+
+/usr/include/c++/9/ext/aligned_buffer.h:
+
+/usr/include/c++/9/map:
 
 /usr/include/x86_64-linux-gnu/bits/signal_ext.h:
 
@@ -302,17 +362,35 @@ CMakeFiles/motor_ctrl.dir/example/motor_ctrl.cpp.o: ../example/motor_ctrl.cpp \
 
 /usr/include/x86_64-linux-gnu/bits/siginfo-consts.h:
 
+/usr/include/c++/9/utility:
+
 /usr/include/x86_64-linux-gnu/bits/siginfo-arch.h:
 
 /usr/include/x86_64-linux-gnu/bits/ss_flags.h:
 
 /usr/include/x86_64-linux-gnu/bits/types/sig_atomic_t.h:
 
+/usr/include/c++/9/csignal:
+
+/usr/include/x86_64-linux-gnu/bits/iscanonical.h:
+
+/usr/include/x86_64-linux-gnu/bits/mathcalls.h:
+
+/usr/include/x86_64-linux-gnu/bits/mathcalls-helper-functions.h:
+
+/usr/include/x86_64-linux-gnu/bits/fp-fast.h:
+
+/usr/include/x86_64-linux-gnu/bits/flt-eval-method.h:
+
+/usr/include/x86_64-linux-gnu/bits/math-vector.h:
+
 /usr/include/x86_64-linux-gnu/bits/floatn.h:
 
 /usr/include/x86_64-linux-gnu/bits/types/timer_t.h:
 
 /usr/include/c++/9/bits/postypes.h:
+
+/usr/include/c++/9/tuple:
 
 /usr/include/c++/9/bits/stl_function.h:
 
@@ -322,6 +400,8 @@ CMakeFiles/motor_ctrl.dir/example/motor_ctrl.cpp.o: ../example/motor_ctrl.cpp \
 
 /usr/include/c++/9/cwctype:
 
+/usr/include/c++/9/bits/refwrap.h:
+
 /usr/include/c++/9/clocale:
 
 /usr/include/x86_64-linux-gnu/bits/types/sigval_t.h:
@@ -329,6 +409,8 @@ CMakeFiles/motor_ctrl.dir/example/motor_ctrl.cpp.o: ../example/motor_ctrl.cpp \
 /usr/include/x86_64-linux-gnu/c++/9/bits/c++locale.h:
 
 /usr/include/c++/9/cstdio:
+
+/usr/include/math.h:
 
 /usr/include/x86_64-linux-gnu/bits/types/__FILE.h:
 
@@ -346,6 +428,8 @@ CMakeFiles/motor_ctrl.dir/example/motor_ctrl.cpp.o: ../example/motor_ctrl.cpp \
 
 /usr/include/c++/9/bits/vector.tcc:
 
+/usr/include/c++/9/cmath:
+
 /usr/include/c++/9/bits/range_access.h:
 
 /usr/include/c++/9/cwchar:
@@ -355,6 +439,8 @@ CMakeFiles/motor_ctrl.dir/example/motor_ctrl.cpp.o: ../example/motor_ctrl.cpp \
 /usr/include/c++/9/new:
 
 /usr/include/c++/9/bits/stl_uninitialized.h:
+
+/usr/include/c++/9/bits/shared_ptr.h:
 
 /usr/include/c++/9/backward/binders.h:
 
@@ -385,6 +471,8 @@ CMakeFiles/motor_ctrl.dir/example/motor_ctrl.cpp.o: ../example/motor_ctrl.cpp \
 /usr/include/c++/9/bits/cxxabi_forced.h:
 
 /usr/include/c++/9/limits:
+
+/usr/include/c++/9/bits/std_mutex.h:
 
 /usr/include/c++/9/ext/new_allocator.h:
 
@@ -444,6 +532,8 @@ CMakeFiles/motor_ctrl.dir/example/motor_ctrl.cpp.o: ../example/motor_ctrl.cpp \
 
 /usr/include/x86_64-linux-gnu/bits/termios-c_cflag.h:
 
+/usr/include/c++/9/backward/auto_ptr.h:
+
 /usr/include/x86_64-linux-gnu/bits/wchar.h:
 
 /usr/include/x86_64-linux-gnu/bits/types/cookie_io_functions_t.h:
@@ -475,6 +565,8 @@ CMakeFiles/motor_ctrl.dir/example/motor_ctrl.cpp.o: ../example/motor_ctrl.cpp \
 /usr/include/x86_64-linux-gnu/bits/getopt_core.h:
 
 /usr/include/c++/9/bits/stl_iterator.h:
+
+/usr/include/c++/9/bits/stl_map.h:
 
 /usr/include/x86_64-linux-gnu/bits/fcntl-linux.h:
 
@@ -552,6 +644,8 @@ CMakeFiles/motor_ctrl.dir/example/motor_ctrl.cpp.o: ../example/motor_ctrl.cpp \
 
 /usr/include/x86_64-linux-gnu/bits/long-double.h:
 
+/usr/include/c++/9/bits/unique_lock.h:
+
 /usr/include/wchar.h:
 
 /usr/include/x86_64-linux-gnu/c++/9/bits/cpu_defines.h:
@@ -596,7 +690,11 @@ CMakeFiles/motor_ctrl.dir/example/motor_ctrl.cpp.o: ../example/motor_ctrl.cpp \
 
 /usr/include/c++/9/bits/concept_check.h:
 
+/usr/include/c++/9/mutex:
+
 /usr/include/c++/9/bits/stringfwd.h:
+
+/usr/include/x86_64-linux-gnu/bits/fp-logb.h:
 
 /usr/include/x86_64-linux-gnu/bits/wchar2.h:
 
@@ -623,6 +721,8 @@ CMakeFiles/motor_ctrl.dir/example/motor_ctrl.cpp.o: ../example/motor_ctrl.cpp \
 /usr/include/c++/9/bits/exception_defines.h:
 
 /usr/include/c++/9/type_traits:
+
+/usr/include/c++/9/bits/shared_ptr_atomic.h:
 
 /usr/include/x86_64-linux-gnu/bits/termios-struct.h:
 
@@ -656,7 +756,11 @@ CMakeFiles/motor_ctrl.dir/example/motor_ctrl.cpp.o: ../example/motor_ctrl.cpp \
 
 /usr/include/c++/9/ext/alloc_traits.h:
 
+/usr/include/c++/9/bits/shared_ptr_base.h:
+
 /usr/include/x86_64-linux-gnu/bits/environments.h:
+
+/usr/include/c++/9/bits/stl_raw_storage_iter.h:
 
 /usr/include/c++/9/ext/string_conversions.h:
 
@@ -687,6 +791,8 @@ CMakeFiles/motor_ctrl.dir/example/motor_ctrl.cpp.o: ../example/motor_ctrl.cpp \
 /usr/include/string.h:
 
 /usr/include/x86_64-linux-gnu/bits/stdio2.h:
+
+/usr/include/c++/9/memory:
 
 /usr/include/c++/9/cerrno:
 
@@ -719,6 +825,8 @@ CMakeFiles/motor_ctrl.dir/example/motor_ctrl.cpp.o: ../example/motor_ctrl.cpp \
 /usr/include/x86_64-linux-gnu/bits/types/struct_iovec.h:
 
 /usr/include/c++/9/istream:
+
+/usr/include/x86_64-linux-gnu/bits/mathcalls-narrow.h:
 
 /usr/include/linux/falloc.h:
 
@@ -762,6 +870,8 @@ CMakeFiles/motor_ctrl.dir/example/motor_ctrl.cpp.o: ../example/motor_ctrl.cpp \
 
 /usr/include/x86_64-linux-gnu/bits/unistd.h:
 
+/usr/include/c++/9/bits/stl_tempbuf.h:
+
 /usr/include/c++/9/cstdlib:
 
 /usr/include/x86_64-linux-gnu/bits/unistd_ext.h:
@@ -792,6 +902,8 @@ CMakeFiles/motor_ctrl.dir/example/motor_ctrl.cpp.o: ../example/motor_ctrl.cpp \
 
 /usr/include/x86_64-linux-gnu/c++/9/bits/ctype_inline.h:
 
+/usr/include/x86_64-linux-gnu/bits/libm-simd-decl-stubs.h:
+
 /usr/include/x86_64-linux-gnu/sys/ttydefaults.h:
 
 /usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h:
@@ -801,6 +913,8 @@ CMakeFiles/motor_ctrl.dir/example/motor_ctrl.cpp.o: ../example/motor_ctrl.cpp \
 /usr/include/asm-generic/posix_types.h:
 
 /usr/include/c++/9/system_error:
+
+/usr/include/c++/9/thread:
 
 /usr/include/x86_64-linux-gnu/c++/9/bits/error_constants.h:
 
@@ -817,6 +931,8 @@ CMakeFiles/motor_ctrl.dir/example/motor_ctrl.cpp.o: ../example/motor_ctrl.cpp \
 /usr/include/c++/9/bits/sstream.tcc:
 
 ../include/unitreeMotor/unitreeMotor.h:
+
+/usr/include/c++/9/bits/stl_tree.h:
 
 /usr/include/c++/9/cstdint:
 
@@ -837,5 +953,3 @@ CMakeFiles/motor_ctrl.dir/example/motor_ctrl.cpp.o: ../example/motor_ctrl.cpp \
 /usr/include/c++/9/bits/atomic_lockfree_defines.h:
 
 /usr/include/c++/9/chrono:
-
-/usr/include/c++/9/csignal:

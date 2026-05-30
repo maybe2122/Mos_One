@@ -4,14 +4,14 @@
 SDK 的可传参驱动 / 读取小工具 `motor_ctrl`，方便在 4 路 USB‑RS485 模块上批量查看 /
 修改电机 ID、做单电机驱动 / 停止测试，以及读取所有电机当前角度。
 
-两个等价前端，功能一致，按需选用：
+前端为网页版 `motor_web.py`：纯标准库无依赖、浏览器渲染中文（不会出现字体方块）、
+默认只监听本机：
 
-| 前端 | 文件 | 启动 | 说明 |
-|------|------|------|------|
-| **网页版（推荐）** | `motor_web.py` | `python3 scripts/motor_web.py` 后浏览器开 `http://127.0.0.1:8000` | 纯标准库无依赖；浏览器渲染中文，无 Tk 字体方块问题；默认只监听本机 |
-| Tkinter 版 | `motor_id_gui.py` | `python3 scripts/motor_id_gui.py` | 需 `python3-tk`；部分 Linux 中文显示为方块 |
+```bash
+python3 scripts/motor_web.py   # 浏览器开 http://127.0.0.1:8000
+```
 
-> 网页版默认仅监听 `127.0.0.1`。如需在另一台机器的浏览器访问：
+> 默认仅监听 `127.0.0.1`。如需在另一台机器的浏览器访问：
 > `HOST=0.0.0.0 PORT=8000 python3 scripts/motor_web.py`（注意这会把电机控制暴露到局域网）。
 
 ### robot_web.py —— 四足机器人操控（站立）
@@ -21,6 +21,13 @@ SDK 的可传参驱动 / 读取小工具 `motor_ctrl`，方便在 4 路 USB‑RS
 配置趴姿，通过后按关节限速（默认 ≤0.1 rad/s）缓慢起身。底层复用 `motor_ctrl`
 （`read` 读角；新增 `servo` 流式位置伺服，插值在 Python 端算）。设计细节见
 `motor_control/doc/四足站立控制设计.md`。
+
+**单腿验证 / 方向验证**（首次标定后、整机站立前务必先逐腿核对）：面板「单腿验证」
+下拉选腿（FL/FR/RL/RR），只在该腿对应的那一路总线上发力、其它腿完全不碰，走与整机
+站立同一套安全校验 + 限速插值，安全地确认这条腿是否朝「站起来」方向收拢。「方向验证」
+则让单腿各关节（或单个关节）从当前位置朝站立方向各转一个固定小角度（默认 10°），
+用来快速判断哪个关节方向标反。
+（此前的命令行脚本 `test_one_leg.py` 已被这两项网页功能取代并删除。）
 
 ```bash
 python3 scripts/robot_web.py   # 浏览器开 http://127.0.0.1:8000
@@ -33,9 +40,10 @@ usb1=4/5/6(FR)、usb2=7/8/9(RL)、usb3=10/11/12(RR)，腿内顺序 hip/thigh/sha
 > 机械改动 / 重新装配 / 换电机 / 改 ID 后才需重新标定。站立前的安全校验（当前角是否贴近
 > 配置趴姿）仍会执行，作为"确实趴好了"的安全门槛。
 
-以下文档以 Tkinter 版为主，网页版操作区块、底层命令、`sudo` 密码策略与其完全一致。
+以下是 `motor_web.py`（电机管理网页）的功能、底层命令与 `sudo` 密码策略详解；
+`robot_web.py` 与其共用同一套底层命令与密码策略。
 
-## motor_id_gui.py（Tkinter 版）
+## motor_web.py（电机管理网页）详解
 
 ## 功能一览
 
@@ -57,7 +65,7 @@ usb1=4/5/6(FR)、usb2=7/8/9(RL)、usb3=10/11/12(RR)，腿内顺序 hip/thigh/sha
 
 ## 依赖
 
-- Linux + Python 3（标准库 `tkinter` 必装：`sudo apt install python3-tk`）
+- Linux + Python 3（纯标准库，无需额外依赖）
 - 宇树 GO-M8010-6 SDK 解压目录，包含：
   - `motor_tools/Unitree_MotorTools_v0.2.0_x86_64_Linux/{swboot,changeid,swmotor}`
   - `build/motor_ctrl`（需要先在 SDK 目录下编译，见下）
@@ -76,7 +84,7 @@ cmake ..
 make motor_ctrl
 ```
 
-产物 `build/motor_ctrl` 必须存在，否则 GUI 启动时会弹警告，「驱动转动」按钮不可用。
+产物 `build/motor_ctrl` 必须存在，否则网页启动时会在输出区警告，「驱动转动」按钮不可用。
 
 参数：
 
@@ -88,7 +96,7 @@ motor_ctrl <port> <id|all> read
 
 - `duration_ms = 0`：永远循环，直到被外部 SIGTERM
 - 收到 SIGTERM/SIGINT 时，若处于 drive 模式会自动补发 200 ms 的停止脉冲
-- `read`：只发零力矩指令读取当前状态，**不驱动电机**；`all` 遍历 ID 0~14。
+- `read`：只发零力矩指令读取当前状态，**不驱动电机**；`all` 遍历 ID 1~12（本机电机从 1 起编号）。
   每个响应电机打印一行 `ANGLE id=.. ok=1 rotor=.. joint=.. deg=.. temp=.. err=..`，
   其中 `joint = rotor / 6.33`（减速比），即输出轴（关节）角度。
 
@@ -101,7 +109,7 @@ motor_ctrl <port> <id|all> read
 
 ```bash
 export UNITREE_MOTOR_SDK="/your/path/to/Linux平台电机使用例程(包含SDK)"
-python3 motor_id_gui.py
+python3 scripts/motor_web.py
 ```
 
 涉及到的目录：
@@ -116,17 +124,17 @@ python3 motor_id_gui.py
 ## 运行
 
 ```bash
-python3 /home/maybe/code/rl/Stackforce-simready-mos2026/motor_control/scripts/motor_id_gui.py
+python3 scripts/motor_web.py   # 浏览器开 http://127.0.0.1:8000
 ```
 
-或加入 `PATH` / 桌面快捷方式自取。脚本权限为 `700`，仅本用户可读 / 执行。
+脚本权限为 `700`，仅本用户可读 / 执行（因内置明文 sudo 密码，见下）。
 
 ## 权限与密码
 
 `swboot` / `changeid` / `swmotor` / `motor_ctrl` 都需要 root 才能访问串口。
 脚本顶部 `SUDO_PASSWORD = "1"` 用于通过 `sudo -S` 自动喂密码，免去每次输入。
 
-> ⚠️ 这是明文密码。脚本权限已限制为 `700`（`chmod 700 motor_id_gui.py`），
+> ⚠️ 这是明文密码。脚本权限已限制为 `700`（`chmod 700 motor_web.py robot_web.py`），
 > 仅本用户可读。**不要把该文件提交到 git 或分享给他人**；如需分享，
 > 先把 `SUDO_PASSWORD` 那一行删掉。
 >
@@ -148,7 +156,7 @@ EOF
 ## 典型工作流
 
 1. **接好硬件**：USB‑RS485 模块连主机，4 路总线接对应电机并上电。
-2. 启动 GUI，确认下方串口下拉框列出了 `/dev/ttyUSB0..3`。
+2. 启动网页，确认串口下拉框列出了 `/dev/ttyUSB0..3`。
 3. 点 **扫描全部 ttyUSB***，看汇总：哪一路总线上有哪些 ID。
 4. 如果要改 ID：
    - 上方串口下拉框选中对应路。
@@ -175,8 +183,8 @@ EOF
 
 ```
 scripts/
-├── motor_web.py        # 网页版前端 + 服务（纯标准库，推荐）
-├── motor_id_gui.py     # Tkinter 版 GUI（含明文 sudo 密码，权限 700）
+├── motor_web.py        # 电机管理网页：ID 管理 / 驱动 / 读角度 / 姿态标定
+├── robot_web.py        # 四足操控网页：整机站立 + 单腿验证 + 方向验证
 └── README.md           # 本文档
 ```
 

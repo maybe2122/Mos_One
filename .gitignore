@@ -1,3 +1,4 @@
 *.pt
 logs/
 outputs/
+.claude/

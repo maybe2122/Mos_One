@@ -16,7 +16,7 @@
       "prone_deg": 48.92,
       "stand_deg": 29.26,
       "dir": -1,
-      "verified": false
+      "verified": true
     },
     {
       "name": "fl_thigh",
@@ -29,7 +29,8 @@
       "stand_rad": 0.946563,
       "prone_deg": 31.21,
       "stand_deg": 54.234,
-      "dir": 1
+      "dir": 1,
+      "verified": true
     },
     {
       "name": "fl_shank",
@@ -42,7 +43,8 @@
       "stand_rad": -0.046953,
       "prone_deg": 28.153,
       "stand_deg": -2.69,
-      "dir": -1
+      "dir": -1,
+      "verified": true
     },
     {
       "name": "fr_hip",

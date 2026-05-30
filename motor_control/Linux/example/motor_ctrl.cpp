@@ -7,8 +7,9 @@
 //   motor_ctrl <port> servo <kp> <kw>
 // 参数说明：
 //   port            串口号，如 /dev/ttyUSB0
-//   id              电机 ID；read 时可用 all 遍历 0~14
-//   speed_rad_s     目标输出转速（rad/s），默认 6.28*6.33（与 main.cpp 一致）
+//   id              电机 ID 1~12；read 时可用 all 遍历 1~12
+//   speed_rad_s     目标【转子】转速(rad/s)，直接写入 cmd.W(手册表1 ω_set 为转子侧)；
+//                   输出端转速 = 此值 / 6.33。默认 6.28*6.33(=输出 6.28rad/s，与 main.cpp 一致)
 //   duration_ms     持续时间（毫秒），0 = 永远（直到外部 kill），默认 drive=0 / stop=500
 //   servo kp kw     常驻流式位置伺服：从 stdin 逐行读 "<id> <pos_rotor> [<id> <pos_rotor>...]"，
 //                   以 mode=1,K_P=kp,K_W=kw,Pos=target 持续重发（到位后保持）。
@@ -36,6 +37,15 @@
 // GO-M8010-6 减速比：data.Pos 是转子角度，关节角度 = 转子角度 / 6.33。
 static const double GEAR_RATIO = 6.33;
 
+// 本机共 12 个电机，从 1 开始编号，合法单播 ID 为 1~12。
+// （手册：ID 15 为广播地址，单播无返回；read all 在 [MIN,MAX] 区间内遍历。）
+static const int MIN_MOTOR_ID = 1;
+static const int MAX_MOTOR_ID = 12;
+
+// 调试打印间隔(ms)：servo / moveto 每隔这么久打印一行【全部参数】。
+// 调小（如 20）能看清震动细节，但日志更密；调大更安静。
+static long PRINT_INTERVAL_MS = 200;
+
 static std::atomic<bool> g_stop_requested(false);
 
 static void on_signal(int) { g_stop_requested.store(true); }
@@ -43,11 +53,12 @@ static void on_signal(int) { g_stop_requested.store(true); }
 static void print_usage(const char *argv0) {
     std::fprintf(stderr,
         "Usage:\n"
-        "  %s <port> <id> drive [speed_rad_s] [duration_ms]\n"
-        "  %s <port> <id> stop  [duration_ms]\n"
+        "  %s <port> <id> drive  [speed_rad_s] [duration_ms]\n"
+        "  %s <port> <id> stop   [duration_ms]\n"
         "  %s <port> <id|all> read\n"
+        "  %s <port> <id> moveto <move_deg> <joint_vel> [kp] [kw] [t_ff] [on_arrive:release|hold|keep]\n"
         "  %s <port> servo <kp> <kw>\n",
-        argv0, argv0, argv0, argv0);
+        argv0, argv0, argv0, argv0, argv0);
 }
 
 // 读取单个电机的当前角度并打印一行可被 GUI 解析的结果。
@@ -118,7 +129,7 @@ static void servo_stdin_reader() {
         double pos;
         std::lock_guard<std::mutex> lk(g_mtx);
         while (iss >> id >> pos) {
-            if (id < 0 || id > 15) continue;
+            if (id < MIN_MOTOR_ID || id > MAX_MOTOR_ID) continue;
             if (g_targets.find(id) == g_targets.end()) g_order.push_back(id);
             g_targets[id] = pos;
         }
@@ -162,15 +173,27 @@ static int run_servo(const std::string &port, double kp, double kw) {
             cmd.T = 0.0;
             serial.sendRecv(&cmd, &data);
             long t = now_ms();
-            if (t - last_print >= 200) {
-                std::printf("servo id=%d tgt=%.3f Pos=%.3f T=%.3f Temp=%d MError=%d ok=%d\n",
-                            id, tgt[id], data.Pos, data.T, (int)data.Temp,
-                            (int)data.MError, data.correct ? 1 : 0);
+            if (t - last_print >= PRINT_INTERVAL_MS) {
+                double err = cmd.Pos - data.Pos;   // 目标 − 反馈（转子角 rad）
+                std::printf("servo id=%d mode=%d K_P=%.3f K_W=%.3f"
+                            " | 指令 Pos=%.4f W=%.3f T=%.3f"
+                            " | 反馈 Pos=%.4f W=%.3f T=%.3f Temp=%d MError=%d ok=%d"
+                            " | 误差 %.4f rad = %.2f°(关节)\n",
+                            id, cmd.mode, cmd.K_P, cmd.K_W,
+                            cmd.Pos, cmd.W, cmd.T,
+                            data.Pos, data.W, data.T, (int)data.Temp,
+                            (int)data.MError, data.correct ? 1 : 0,
+                            err, err / GEAR_RATIO * 180.0 / M_PI);
+                // 机器可解析的紧凑反馈行（供 robot_web.py 实时表格用；前缀 FB，不进日志）
+                std::printf("FB id=%d pos=%.5f vel=%.4f tau=%.4f temp=%d merr=%d ok=%d errd=%.3f\n",
+                            id, data.Pos, data.W, data.T, (int)data.Temp,
+                            (int)data.MError, data.correct ? 1 : 0,
+                            err / GEAR_RATIO * 180.0 / M_PI);
                 std::fflush(stdout);
             }
         }
         long t = now_ms();
-        if (t - last_print >= 200) last_print = t;
+        if (t - last_print >= PRINT_INTERVAL_MS) last_print = t;
         if (ids.empty() && g_eof.load()) break;   // 还没收到任何目标且 stdin 已关 => 退出
         usleep(2000);                              // ~ 每轮 2ms，整体由 sendRecv 节流
     }
@@ -203,6 +226,124 @@ static int run_servo(const std::string &port, double kp, double kw) {
     return 0;
 }
 
+// 平滑位置移动（与 example/main.cpp 的位置控制逻辑一致）：
+// 先读当前转子位置当起点，再把目标位置按 joint_vel 平滑递增（轨迹），
+// 以 mode=1 + K_P/K_W + 速度前馈跟随，到位后保持；收到 SIGTERM/SIGINT 退出前松力。
+// 低速也丝滑的原因：力矩主要来自 K_P×位置误差（编码器位置干净），目标平滑递增，
+// 运动时给速度前馈，K_W 阻尼项不与运动对抗。
+static int run_moveto(const std::string &port, int id, double move_deg,
+                      double joint_vel, double kp, double kw, double t_ff,
+                      const std::string &on_arrive) {
+    std::signal(SIGINT, on_signal);
+    std::signal(SIGTERM, on_signal);
+
+    SerialPort serial(port);
+    MotorCmd cmd;
+    MotorData data;
+    cmd.motorType = MotorType::GO_M8010_6;
+
+    // 1) 读当前转子位置当轨迹起点（K_P=K_W=0 只读不驱动）
+    double cur = 0.0;
+    bool got = false;
+    for (int i = 0; i < 50 && !got; ++i) {
+        cmd.id = id; cmd.mode = 1;
+        cmd.K_P = 0.0; cmd.K_W = 0.0; cmd.Pos = 0.0; cmd.W = 0.0; cmd.T = 0.0;
+        serial.sendRecv(&cmd, &data);
+        if (data.correct) { cur = data.Pos; got = true; }
+        usleep(2000);
+    }
+    if (!got) {
+        std::printf("MOVETO id=%d ok=0 (读不到当前位置：检查串口/ID/电机模式)\n", id);
+        std::fflush(stdout);
+        return 1;
+    }
+
+    const double RATE_HZ = 500.0;
+    const double delta_rotor = move_deg * M_PI / 180.0 * GEAR_RATIO;
+    const double target = cur + delta_rotor;
+    const double vel_rotor = joint_vel * GEAR_RATIO;     // 转子角速度
+    const double dir = (delta_rotor >= 0) ? 1.0 : -1.0;
+    const long us = (long)(1e6 / RATE_HZ);
+    double pos_des = cur;
+
+    std::printf("[motor_ctrl] moveto id=%d cur=%.3f -> target=%.3f rad(rotor) "
+                "| joint %+.1f deg | vel=%.2f rad/s kp=%.2f kw=%.2f t_ff=%.3f on_arrive=%s\n",
+                id, cur, target, move_deg, joint_vel, kp, kw, t_ff, on_arrive.c_str());
+    std::fflush(stdout);
+
+    // 2) 平滑递增设定点跑位置环。用【实测 dt】推进设定点，使设定点速率与速度前馈
+    //    严格一致——否则 sendRecv 阻塞导致实际循环慢于 RATE_HZ，前馈速度会大于设定点
+    //    真实推进速度，电机"想跑快又被位置项拉回"来回较劲 → 抖动。
+    //    到位后按 on_arrive 处理：hold=持续保持(直到停止信号)；release/keep=稳定后退出。
+    const long SETTLE_MS = 300;        // 到位后再稳定多久才退出
+    bool arrived_latched = false;
+    long arrived_time = 0;
+    long last_print = now_ms();
+    long t_prev = now_ms();
+    while (!g_stop_requested.load()) {
+        long tnow = now_ms();
+        double dt = (tnow - t_prev) / 1000.0;
+        t_prev = tnow;
+        if (dt <= 0.0 || dt > 0.1) dt = 1.0 / RATE_HZ;   // 防御异常 dt
+
+        double stepmax = vel_rotor * dt;                 // 本周期最多推进的转子角
+        bool arrived = std::fabs(target - pos_des) <= stepmax;
+        if (arrived) pos_des = target;
+        else         pos_des += dir * stepmax;
+
+        cmd.id = id; cmd.mode = 1;
+        cmd.K_P = kp; cmd.K_W = kw;
+        cmd.Pos = pos_des;
+        cmd.W = arrived ? 0.0 : dir * vel_rotor;   // 与设定点速率一致的速度前馈，到位归零
+        cmd.T = t_ff;                              // 力矩前馈（常驻，可补偿重力/负载）
+        serial.sendRecv(&cmd, &data);
+
+        if (tnow - last_print >= PRINT_INTERVAL_MS) {
+            last_print = tnow;
+            double err = cmd.Pos - data.Pos;   // 目标 − 反馈（转子角 rad）
+            std::printf("moveto id=%d mode=%d K_P=%.3f K_W=%.3f"
+                        " | 指令 Pos=%.4f W=%.3f T=%.3f"
+                        " | 反馈 Pos=%.4f W=%.3f T=%.3f Temp=%d MError=%d ok=%d"
+                        " | 误差 %.4f rad = %.2f°(关节)%s\n",
+                        id, cmd.mode, cmd.K_P, cmd.K_W,
+                        cmd.Pos, cmd.W, cmd.T,
+                        data.Pos, data.W, data.T, (int)data.Temp,
+                        (int)data.MError, data.correct ? 1 : 0,
+                        err, err / GEAR_RATIO * 180.0 / M_PI,
+                        arrived ? " [到位]" : "");
+            std::fflush(stdout);
+        }
+
+        // 到位后：hold 模式继续保持；release/keep 稳定 SETTLE_MS 后退出循环
+        if (arrived && on_arrive != "hold") {
+            if (!arrived_latched) { arrived_latched = true; arrived_time = tnow; }
+            if (tnow - arrived_time >= SETTLE_MS) break;
+        }
+        usleep(us);
+    }
+
+    // 3) 退出处理：
+    //    - 被外部停止(SIGTERM) 或 on_arrive=release：发 mode=0 松力脉冲（电机松开）
+    //    - on_arrive=keep：不发松力，保留最后一帧（电机维持最后命令，固件相关）
+    bool brake = g_stop_requested.load() || (on_arrive != "keep");
+    if (brake) {
+        std::printf("[motor_ctrl] moveto exit: releasing (mode=0)...\n");
+        std::fflush(stdout);
+        long stop_start = now_ms();
+        while (now_ms() - stop_start < 200) {
+            cmd.id = id; cmd.mode = 0;
+            cmd.K_P = 0.0; cmd.K_W = 0.0; cmd.Pos = 0.0; cmd.W = 0.0; cmd.T = 0.0;
+            serial.sendRecv(&cmd, &data);
+            usleep(2000);
+        }
+    } else {
+        std::printf("[motor_ctrl] moveto exit: keep last command (no brake).\n");
+        std::fflush(stdout);
+    }
+    std::printf("[motor_ctrl] moveto exit.\n");
+    return 0;
+}
+
 int main(int argc, char **argv) {
     // 流式位置伺服：motor_ctrl <port> servo <kp> <kw>（action 在 argv[2]，无 id 位）
     if (argc >= 3 && std::string(argv[2]) == "servo") {
@@ -227,8 +368,9 @@ int main(int argc, char **argv) {
     bool read_all = (action == "read" && id_arg == "all");
     int id = std::atoi(id_arg.c_str());
 
-    if (!read_all && (id < 0 || id > 15)) {
-        std::fprintf(stderr, "id 必须在 0~15 范围(read 时可用 all): %s\n", id_arg.c_str());
+    if (!read_all && (id < MIN_MOTOR_ID || id > MAX_MOTOR_ID)) {
+        std::fprintf(stderr, "id 必须在 %d~%d 范围(read 时可用 all): %s\n",
+                     MIN_MOTOR_ID, MAX_MOTOR_ID, id_arg.c_str());
         return 2;
     }
 
@@ -236,11 +378,26 @@ int main(int argc, char **argv) {
     if (action == "read") {
         SerialPort serial(port);
         if (read_all) {
-            for (int i = 0; i <= 14; ++i) read_one(serial, i);
+            for (int i = MIN_MOTOR_ID; i <= MAX_MOTOR_ID; ++i) read_one(serial, i);
         } else {
             read_one(serial, id);
         }
         return 0;
+    }
+
+    // 平滑位置移动：moveto <move_deg> <joint_vel> [kp] [kw]
+    if (action == "moveto") {
+        if (argc < 6) {
+            print_usage(argv[0]);
+            return 1;
+        }
+        double move_deg  = std::atof(argv[4]);
+        double joint_vel = std::atof(argv[5]);
+        double kp   = (argc >= 7) ? std::atof(argv[6]) : 2.0;
+        double kw   = (argc >= 8) ? std::atof(argv[7]) : 0.1;
+        double t_ff = (argc >= 9) ? std::atof(argv[8]) : 0.0;
+        std::string on_arrive = (argc >= 10) ? std::string(argv[9]) : "release";
+        return run_moveto(port, id, move_deg, joint_vel, kp, kw, t_ff, on_arrive);
     }
 
     double speed = 6.28 * 6.33;
