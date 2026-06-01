@@ -16,7 +16,8 @@
       "prone_deg": 48.92,
       "stand_deg": 29.26,
       "dir": -1,
-      "verified": true
+      "verified": true,
+      "t_ff": 0.0
     },
     {
       "name": "fl_thigh",
@@ -57,7 +58,9 @@
       "stand_rad": 1.104354,
       "prone_deg": 50.624,
       "stand_deg": 63.275,
-      "dir": 1
+      "dir": 1,
+      "verified": true,
+      "t_ff": 0.0
     },
     {
       "name": "fr_thigh",
@@ -70,7 +73,8 @@
       "stand_rad": -0.243153,
       "prone_deg": 25.309,
       "stand_deg": -13.932,
-      "dir": -1
+      "dir": -1,
+      "verified": true
     },
     {
       "name": "fr_shank",
@@ -83,7 +87,8 @@
       "stand_rad": 0.556705,
       "prone_deg": 10.913,
       "stand_deg": 31.897,
-      "dir": 1
+      "dir": 1,
+      "verified": true
     },
     {
       "name": "rl_hip",
@@ -96,7 +101,9 @@
       "stand_rad": 0.634313,
       "prone_deg": 19.112,
       "stand_deg": 36.343,
-      "dir": 1
+      "dir": 1,
+      "verified": true,
+      "t_ff": 0.0
     },
     {
       "name": "rl_thigh",
@@ -109,7 +116,8 @@
       "stand_rad": 0.093905,
       "prone_deg": 28.932,
       "stand_deg": 5.38,
-      "dir": -1
+      "dir": -1,
+      "verified": true
     },
     {
       "name": "rl_shank",
@@ -122,7 +130,8 @@
       "stand_rad": 0.945836,
       "prone_deg": 21.841,
       "stand_deg": 54.192,
-      "dir": 1
+      "dir": 1,
+      "verified": true
     },
     {
       "name": "rr_hip",
@@ -135,33 +144,37 @@
       "stand_rad": 0.569882,
       "prone_deg": 48.378,
       "stand_deg": 32.652,
-      "dir": -1
+      "dir": -1,
+      "verified": true,
+      "t_ff": 0.0
     },
     {
       "name": "rr_thigh",
       "port": "/dev/ttyUSB3",
       "id": 11,
-      "prone_rotor": 0.555495,
-      "stand_rotor": 3.011789,
-      "delta_rotor": 2.456293,
-      "prone_rad": 0.087756,
-      "stand_rad": 0.475796,
-      "prone_deg": 5.028,
-      "stand_deg": 27.261,
-      "dir": 1
+      "prone_rotor": 4.720782,
+      "stand_rotor": 7.609817,
+      "delta_rotor": 2.889035,
+      "prone_rad": 0.745779,
+      "stand_rad": 1.202183,
+      "prone_deg": 42.73,
+      "stand_deg": 68.88,
+      "dir": 1,
+      "verified": true
     },
     {
       "name": "rr_shank",
       "port": "/dev/ttyUSB3",
       "id": 12,
-      "prone_rotor": 5.804407,
-      "stand_rotor": 1.722089,
-      "delta_rotor": -4.082318,
-      "prone_rad": 0.916968,
-      "stand_rad": 0.272052,
-      "prone_deg": 52.538,
-      "stand_deg": 15.587,
-      "dir": -1
+      "prone_rotor": 3.762926,
+      "stand_rotor": 0.970009,
+      "delta_rotor": -2.792917,
+      "prone_rad": 0.594459,
+      "stand_rad": 0.15324,
+      "prone_deg": 34.06,
+      "stand_deg": 8.78,
+      "dir": -1,
+      "verified": true
     }
   ],
   "execute": {
@@ -169,8 +182,9 @@
     "max_joint_vel_rad_s": 0.05,
     "min_duration_s": 2.0,
     "rate_hz": 100,
-    "k_p": 2.0,
-    "k_w": 1.0
+    "k_p": 25,
+    "k_w": 0.1,
+    "staged": true
   },
-  "_execute_note": "悬空验证用的温柔参数（低增益/慢速）。验证通过后如需正式站立再调回 k_p≈8。"
+  "_execute_note": "k_p=25 接近上限 25.599（高刚度，正式站立用）；若抖动/过冲可降到 8~15。"
 }

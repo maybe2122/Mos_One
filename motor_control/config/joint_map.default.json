@@ -21,7 +21,8 @@
     "max_joint_vel_rad_s": 0.1,
     "min_duration_s": 1.0,
     "rate_hz": 100,
-    "k_p": 8.0,
-    "k_w": 0.8
+    "k_p": 25,
+    "k_w": 0.1,
+    "staged": true
   }
 }

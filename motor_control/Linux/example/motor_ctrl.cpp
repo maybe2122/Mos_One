@@ -11,9 +11,10 @@
 //   speed_rad_s     目标【转子】转速(rad/s)，直接写入 cmd.W(手册表1 ω_set 为转子侧)；
 //                   输出端转速 = 此值 / 6.33。默认 6.28*6.33(=输出 6.28rad/s，与 main.cpp 一致)
 //   duration_ms     持续时间（毫秒），0 = 永远（直到外部 kill），默认 drive=0 / stop=500
-//   servo kp kw     常驻流式位置伺服：从 stdin 逐行读 "<id> <pos_rotor> [<id> <pos_rotor>...]"，
-//                   以 mode=1,K_P=kp,K_W=kw,Pos=target 持续重发（到位后保持）。
-//                   收到一行 "stop" 或 EOF / SIGTERM 退出，退出前补 mode=0 停止脉冲。
+//   servo kp kw     常驻流式位置伺服：从 stdin 逐行读 "<id> <pos_rotor> <tff> [<id> <pos_rotor> <tff>...]"，
+//                   以 mode=1,K_P=kp,K_W=kw,Pos=target,T=tff 持续重发（到位后保持）。
+//                   tff 为该电机的前馈力矩(转子侧 N·m，cmd.T)，用于补偿重力/负载、减小保持下沉；
+//                   不需要前馈就传 0。收到一行 "stop" 或 EOF / SIGTERM 退出，退出前补 mode=0 停止脉冲。
 //
 // drive 退出时（不论被 kill 还是计时结束）发一段 mode=0 的停止脉冲，避免电机失控。
 // read 只发送零力矩指令读取当前状态，不驱动电机，读完即退出。
@@ -105,11 +106,13 @@ static long now_ms() {
 }
 
 // 流式位置伺服：常驻进程，按总线持续以位置环重发各电机目标。
-// stdin 每行: "<id> <pos_rotor> [<id> <pos_rotor> ...]"，更新（并新增）目标电机。
+// stdin 每行: "<id> <pos_rotor> <tff> [<id> <pos_rotor> <tff> ...]"，更新（并新增）目标电机。
+// tff 为该电机的前馈力矩(转子侧 N·m)，写入 cmd.T，用于补偿重力/负载、减小保持时下沉。
 // 一行 "stop" / EOF / SIGTERM 退出；退出前对所有出现过的电机补 mode=0 停止脉冲。
-// 关节限速 / 插值由上层（Python）负责，本进程只把收到的目标位置交给电机内部 PD 跟随。
+// 关节限速 / 插值 / 前馈力矩由上层（Python）负责算，本进程只把目标位置+前馈交给电机内部 PD 跟随。
 static std::mutex g_mtx;
 static std::map<int, double> g_targets;     // id -> 目标转子角(rad)
+static std::map<int, double> g_tff;         // id -> 前馈力矩(转子侧 N·m，cmd.T)
 static std::vector<int> g_order;            // 出现顺序，便于稳定遍历
 static std::atomic<bool> g_eof(false);
 
@@ -126,12 +129,13 @@ static void servo_stdin_reader() {
         }
         std::istringstream iss(s);
         int id;
-        double pos;
+        double pos, tff;
         std::lock_guard<std::mutex> lk(g_mtx);
-        while (iss >> id >> pos) {
+        while (iss >> id >> pos >> tff) {     // 三元组: id 位置 前馈力矩
             if (id < MIN_MOTOR_ID || id > MAX_MOTOR_ID) continue;
             if (g_targets.find(id) == g_targets.end()) g_order.push_back(id);
             g_targets[id] = pos;
+            g_tff[id] = tff;
         }
     }
     g_eof.store(true);                        // stdin 关闭
@@ -158,10 +162,12 @@ static int run_servo(const std::string &port, double kp, double kw) {
         // 取一份当前目标快照，逐个电机发位置指令
         std::vector<int> ids;
         std::map<int, double> tgt;
+        std::map<int, double> tff;
         {
             std::lock_guard<std::mutex> lk(g_mtx);
             ids = g_order;
             tgt = g_targets;
+            tff = g_tff;
         }
         for (int id : ids) {
             cmd.id = id;
@@ -170,7 +176,7 @@ static int run_servo(const std::string &port, double kp, double kw) {
             cmd.K_W = kw;
             cmd.Pos = tgt[id];
             cmd.W = 0.0;
-            cmd.T = 0.0;
+            cmd.T = tff.count(id) ? tff[id] : 0.0;   // 前馈力矩(转子侧 N·m)，补偿重力/负载
             serial.sendRecv(&cmd, &data);
             long t = now_ms();
             if (t - last_print >= PRINT_INTERVAL_MS) {
