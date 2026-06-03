@@ -7,7 +7,7 @@ args_cli = parser.parse_args()
 import gymnasium as gym
 from prettytable import PrettyTable
 
-import stackforce_simready_mos2026_2_closed_usd_closed_usd_lab.tasks  # noqa: F401
+import stackforce_mos.tasks  # noqa: F401
 
 
 def main():

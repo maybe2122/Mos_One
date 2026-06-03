@@ -52,8 +52,8 @@ from isaaclab_rl.rsl_rl import RslRlBaseRunnerCfg
 from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
-import stackforce_simready_mos2026_2_closed_usd_closed_usd_lab.tasks  # noqa: F401
-from stackforce_simready_mos2026_2_closed_usd_closed_usd_lab.tasks.direct.mos2026_2_closed_usd.mos2026_2_closed_usd_env_cfg import (
+import stackforce_mos.tasks  # noqa: F401
+from stackforce_mos.tasks.direct.mos2026_2_closed_usd.mos2026_2_closed_usd_env_cfg import (
     CURRICULUM_TERRAIN_CFG,
     ROUGH_TERRAIN_CFG,
 )
@@ -286,13 +286,129 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRun
     policy = runner.get_inference_policy(device=env.unwrapped.device)
     obs_dict, _ = env.reset()
     steps = 0
+
+    # --- 力矩监控初始化 ---
+    robot = env.unwrapped._robot
+    joint_ids = env.unwrapped._actuated_joint_ids
+    joint_names = env.unwrapped._actuated_joint_names
+    torque_history = []  # 每个元素: shape (num_joints,) 的 cpu tensor（监控 env 0）
+
+    # --- TensorBoard 实时曲线 ---
+    tb_writer = None
+    try:
+        from torch.utils.tensorboard import SummaryWriter
+
+        tb_log_dir = os.path.join(os.path.dirname(resume_path), "play_torque_tb")
+        tb_writer = SummaryWriter(log_dir=tb_log_dir)
+        print(f"[INFO] TensorBoard 力矩日志: {tb_log_dir}", flush=True)
+        print(f"[INFO] 实时查看: tensorboard --logdir {tb_log_dir}", flush=True)
+    except ImportError:
+        print("[WARN] 未安装 tensorboard，跳过实时曲线（pip install tensorboard）", flush=True)
+
     with torch.inference_mode():
         while simulation_app.is_running():
             actions = policy(obs_dict)
             obs_dict, _, _, _, _ = env.step(actions)
             steps += 1
+
+            # 实际施加到各关节的力矩 (num_envs, num_joints) -> 取第 0 个环境
+            tau = robot.data.applied_torque[:, joint_ids][0].detach().cpu()
+            torque_history.append(tau.clone())
+
+            # 写入 TensorBoard（每步一条，可实时刷新）
+            if tb_writer is not None:
+                for n, val in zip(joint_names, tau.tolist()):
+                    tb_writer.add_scalar(f"torque/{n}", val, steps)
+                tb_writer.flush()
+
+            # 实时打印（每 25 步一次，避免刷屏）
+            if steps % 25 == 0 or steps == 1:
+                line = " | ".join(f"{n}:{t:+6.2f}" for n, t in zip(joint_names, tau.tolist()))
+                print(f"[torque step={steps}] {line}", flush=True)
+
             if args_cli.num_steps > 0 and steps >= args_cli.num_steps:
                 break
+
+    # --- 力矩统计汇总 ---
+    if torque_history:
+        data = torch.stack(torque_history, dim=0)  # (steps, num_joints)
+        mean = data.mean(dim=0)
+        std = data.std(dim=0)
+        tmin = data.min(dim=0).values
+        tmax = data.max(dim=0).values
+        absmax = data.abs().max(dim=0).values
+        rms = data.pow(2).mean(dim=0).sqrt()
+        print("\n================ 各电机力矩统计 (单位 N·m) ================", flush=True)
+        header = f"{'joint':<22}{'mean':>9}{'std':>9}{'min':>9}{'max':>9}{'|max|':>9}{'rms':>9}"
+        print(header, flush=True)
+        print("-" * len(header), flush=True)
+        for i, n in enumerate(joint_names):
+            print(
+                f"{n:<22}{mean[i]:>9.3f}{std[i]:>9.3f}{tmin[i]:>9.3f}"
+                f"{tmax[i]:>9.3f}{absmax[i]:>9.3f}{rms[i]:>9.3f}",
+                flush=True,
+            )
+        print("-" * len(header), flush=True)
+        print(
+            f"{'ALL':<22}{mean.mean():>9.3f}{std.mean():>9.3f}{tmin.min():>9.3f}"
+            f"{tmax.max():>9.3f}{absmax.max():>9.3f}{rms.mean():>9.3f}",
+            flush=True,
+        )
+        # 保存到 csv，便于离线分析
+        csv_path = os.path.join(os.path.dirname(resume_path), "play_torque_stats.csv")
+        try:
+            import csv
+
+            with open(csv_path, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["joint", "mean", "std", "min", "max", "abs_max", "rms"])
+                for i, n in enumerate(joint_names):
+                    writer.writerow(
+                        [n, f"{mean[i]:.6f}", f"{std[i]:.6f}", f"{tmin[i]:.6f}",
+                         f"{tmax[i]:.6f}", f"{absmax[i]:.6f}", f"{rms[i]:.6f}"]
+                    )
+            print(f"[INFO] 力矩统计已保存: {csv_path}", flush=True)
+        except OSError as exc:
+            print(f"[WARN] 力矩统计保存失败: {exc}", flush=True)
+
+        # --- 力矩曲线绘制 (每个关节 力矩 vs 步数) ---
+        try:
+            import math
+
+            import matplotlib
+
+            matplotlib.use("Agg")  # 无界面后端，避免阻塞 GUI 渲染
+            import matplotlib.pyplot as plt
+
+            num_joints = data.shape[1]
+            ncols = 3
+            nrows = math.ceil(num_joints / ncols)
+            t = torch.arange(data.shape[0]).numpy()
+            fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 2.6 * nrows), squeeze=False)
+            for i, n in enumerate(joint_names):
+                ax = axes[i // ncols][i % ncols]
+                ax.plot(t, data[:, i].numpy(), linewidth=0.8)
+                ax.axhline(0.0, color="gray", linewidth=0.5)
+                ax.set_title(n, fontsize=9)
+                ax.set_xlabel("step")
+                ax.set_ylabel("N·m")
+                ax.grid(True, alpha=0.3)
+            # 隐藏多余空子图
+            for j in range(num_joints, nrows * ncols):
+                axes[j // ncols][j % ncols].axis("off")
+            fig.tight_layout()
+            png_path = os.path.join(os.path.dirname(resume_path), "play_torque_curves.png")
+            fig.savefig(png_path, dpi=120)
+            plt.close(fig)
+            print(f"[INFO] 力矩曲线已保存: {png_path}", flush=True)
+        except ImportError:
+            print("[WARN] 未安装 matplotlib，跳过曲线绘制（pip install matplotlib）", flush=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[WARN] 力矩曲线绘制失败: {exc}", flush=True)
+
+    if tb_writer is not None:
+        tb_writer.close()
+
     print(f"PLAY_COMPLETED steps={steps} checkpoint={resume_path}", flush=True)
     env.close()
 

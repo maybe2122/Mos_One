@@ -62,8 +62,8 @@ from isaaclab.utils.io import dump_yaml
 from isaaclab_rl.rsl_rl import RslRlBaseRunnerCfg
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
-import stackforce_simready_mos2026_2_closed_usd_closed_usd_lab.tasks  # noqa: F401
-from stackforce_simready_mos2026_2_closed_usd_closed_usd_lab.tasks.direct.mos2026_2_closed_usd.mos2026_2_closed_usd_env_cfg import (
+import stackforce_mos.tasks  # noqa: F401
+from stackforce_mos.tasks.direct.mos2026_2_closed_usd.mos2026_2_closed_usd_env_cfg import (
     CURRICULUM_TERRAIN_CFG,
     ROUGH_TERRAIN_CFG,
 )

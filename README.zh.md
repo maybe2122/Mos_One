@@ -54,7 +54,7 @@ conda activate <你自己的IsaacLab环境名称>
 
 # 2️⃣ 安装导出工程
 cd <exported_project>
-uv pip install -e source/stackforce_simready_mos2026_2_closed_usd_closed_usd_lab
+uv pip install -e source/stackforce_mos
 
 # 3️⃣ 检查环境注册情况
 python scripts/list_envs.py
@@ -264,7 +264,7 @@ python scripts/rsl_rl/play.py \
 > [!WARNING]
 > 如果你把整个工程移到新目录，请在新目录重新执行：
 > ```bash
-> python -m pip install -e source/stackforce_simready_mos2026_2_closed_usd_closed_usd_lab
+> python -m pip install -e source/stackforce_mos
 > ```
 
 ---
@@ -274,8 +274,8 @@ python scripts/rsl_rl/play.py \
 ### 1️⃣ 编辑 Reward 实现
 
 ```
-source/stackforce_simready_mos2026_2_closed_usd_closed_usd_lab/
-  └── stackforce_simready_mos2026_2_closed_usd_closed_usd_lab/
+source/stackforce_mos/
+  └── stackforce_mos/
         └── tasks/direct/mos2026_2_closed_usd/
               └── 📄 custom_rewards.py
 ```
@@ -285,8 +285,8 @@ source/stackforce_simready_mos2026_2_closed_usd_closed_usd_lab/
 ### 2️⃣ 调整 Reward 权重
 
 ```
-source/stackforce_simready_mos2026_2_closed_usd_closed_usd_lab/
-  └── stackforce_simready_mos2026_2_closed_usd_closed_usd_lab/
+source/stackforce_mos/
+  └── stackforce_mos/
         └── tasks/direct/mos2026_2_closed_usd/
               └── 📄 mos2026_2_closed_usd_env_cfg.py
 ```

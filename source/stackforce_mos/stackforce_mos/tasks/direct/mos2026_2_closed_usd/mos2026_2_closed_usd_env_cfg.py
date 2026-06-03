@@ -144,14 +144,18 @@ class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
             restitution=0.0,
         ),
         # 粗糙高度场地形 + 闭链关节会产生远超 PhysX 默认值的宽相位碰撞对。
-        # 以下参数针对 32 GB GPU 调整 — 这些上限为 PhysX 宽相位缓冲区
-        # 预留约 8-10 GB 显存，其余留给策略和渲染。
+        # 注意：之前这些上限是针对 32 GB GPU 调的，其中
+        # gpu_found_lost_aggregate_pairs_capacity=2**29 单独就要 2**29*8 = 4 GiB
+        # 连续显存，在 11 GB 的 2080 Ti 上无法分配，会导致 PhysScene 创建失败
+        # （PxgCudaDeviceMemoryAllocator failed to allocate 4294967296 bytes），
+        # 进而 simulation_view 为 None 报 create_articulation_view 崩溃。
+        # 以下值面向 ~11 GB GPU 收紧；若换回大显存卡可调高。
         physx=PhysxCfg(
-            gpu_found_lost_pairs_capacity=2**25,
-            gpu_found_lost_aggregate_pairs_capacity=2**29,
-            gpu_total_aggregate_pairs_capacity=2**26,
-            gpu_max_rigid_contact_count=2**24,
-            gpu_max_rigid_patch_count=2**21,
+            gpu_found_lost_pairs_capacity=2**23,
+            gpu_found_lost_aggregate_pairs_capacity=2**25,
+            gpu_total_aggregate_pairs_capacity=2**24,
+            gpu_max_rigid_contact_count=2**23,
+            gpu_max_rigid_patch_count=2**20,
         ),
     )
 

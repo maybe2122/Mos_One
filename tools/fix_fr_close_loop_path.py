@@ -26,8 +26,8 @@ from pxr import Sdf
 
 USD_PATH = (
     Path(__file__).resolve().parent.parent
-    / "source/stackforce_simready_mos2026_2_closed_usd_closed_usd_lab"
-    / "stackforce_simready_mos2026_2_closed_usd_closed_usd_lab"
+    / "source/stackforce_mos"
+    / "stackforce_mos"
     / "assets/robots/mos2026_2_closed_usd/usd/mos2026_2.usd"
 )
 

@@ -24,8 +24,8 @@ from pxr import Usd, UsdPhysics  # noqa: E402
 DEFAULT_USD = (
     Path(__file__).resolve().parents[2]
     / "source"
-    / "stackforce_simready_mos2026_2_closed_usd_closed_usd_lab"
-    / "stackforce_simready_mos2026_2_closed_usd_closed_usd_lab"
+    / "stackforce_mos"
+    / "stackforce_mos"
     / "assets"
     / "robots"
     / "mos2026_2_closed_usd"

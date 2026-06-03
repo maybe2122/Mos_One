@@ -11,7 +11,7 @@ simulation_app = app_launcher.app
 
 from pxr import Usd
 
-from stackforce_simready_mos2026_2_closed_usd_closed_usd_lab.tasks.direct.mos2026_2_closed_usd.mos2026_2_closed_usd_env_cfg import USD_PATH
+from stackforce_mos.tasks.direct.mos2026_2_closed_usd.mos2026_2_closed_usd_env_cfg import USD_PATH
 
 
 def main():

@@ -22,7 +22,7 @@ import torch
 
 from isaaclab_tasks.utils import parse_env_cfg
 
-import stackforce_simready_mos2026_2_closed_usd_closed_usd_lab.tasks  # noqa: F401
+import stackforce_mos.tasks  # noqa: F401
 
 
 def make_gait_actions(env, step, phase_offsets):
