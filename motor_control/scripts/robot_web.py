@@ -46,6 +46,12 @@ SUDO_PASSWORD = "1"
 NEED_SUDO = os.geteuid() != 0
 MAX_LOG = 4000
 
+# 站立保持时「单关节微调」：每次最多 ±JOG_STEP_MAX 度（关节角），两次微调间隔至少
+# JOG_COOLDOWN 秒（安全间隔，给人观察/急停的时间）。微调本身按 JOG_VMAX 限速缓慢插值。
+JOG_STEP_MAX = 10.0    # 每次微调最大角度（关节°）
+JOG_COOLDOWN = 1.0     # 两次微调最小安全间隔（s）
+JOG_VMAX = 0.1         # 微调限速（关节角速度 rad/s），越小越慢越稳
+
 
 # ----------------------------------------------------------------- 工具函数
 def parse_angle_line(line):
@@ -125,6 +131,9 @@ class RobotController:
         self.abort = threading.Event()
         self.servo_procs = {}        # port -> Popen（流式伺服进程）
         self.hold_scope = ""         # 当前 servo 锁位保持的范围描述（空=已松开）；供前端「是否松开」显示
+        self.hold_targets = {}       # name -> 当前锁位保持的目标转子角(rad)，供「单关节微调」做增量基准
+        self.hold_tff = {}           # name -> 保持时施加的前馈力矩(转子侧 N·m)
+        self.jog_last = {}           # name -> 上次微调的单调钟时间戳，用于 2s 安全间隔
         self.notice = None           # 供前端弹窗的后台通知 {id,text,level}；轮询到新 id 弹一次
         self.notice_id = 0
 
@@ -619,6 +628,8 @@ class RobotController:
             self.servo_procs = {}
             self.hold_scope = ""      # 电机即将释放，清除「保持中」标记
             self.feedback = {}        # 松开后不再有实时反馈，清空表格反馈列
+            self.hold_targets = {}    # 松开后没有保持目标，禁止微调
+            self.hold_tff = {}
         for port, proc in procs.items():
             try:
                 if brake and proc.poll() is None:
@@ -649,18 +660,21 @@ class RobotController:
             self._stop_servos()
 
     # -- 站立执行（安全校验 + 限速插值 + 流式伺服） --
-    def _do_stand(self, legs=None, kp=None, kw=None, skip_verify=False, ex_override=None):
+    def _do_stand(self, legs=None, kp=None, kw=None, skip_verify=False, ex_override=None, descend=False):
+        verb = "坐下" if descend else "站立"
         try:
-            self._stand_impl(legs, kp, kw, skip_verify=skip_verify, ex_override=ex_override)
+            self._stand_impl(legs, kp, kw, skip_verify=skip_verify, ex_override=ex_override, descend=descend)
         except Exception as e:
-            self.append(f"[异常] 站立执行出错: {e}")
-            self.set_status(f"站立异常: {e}")
-            self._notify(f"站立执行出错：{e}")
+            self.append(f"[异常] {verb}执行出错: {e}")
+            self.set_status(f"{verb}异常: {e}")
+            self._notify(f"{verb}执行出错：{e}")
             self._stop_servos()
             with self.lock:
                 self.phase = "ERROR"
 
-    def _stand_impl(self, legs=None, kp_override=None, kw_override=None, skip_verify=False, ex_override=None):
+    def _stand_impl(self, legs=None, kp_override=None, kw_override=None, skip_verify=False, ex_override=None, descend=False):
+        # descend=True：坐下（站立的反向）——目标 = 当前 − Δ（回到趴姿），分段顺序反过来，
+        # 前馈随下放进度 满→0，并以「站姿」而非「趴姿」做基准。
         cfg = self._load_config()
         if not cfg:
             self.append("[错误] 没有配置文件，请先完成标定并保存。")
@@ -668,14 +682,15 @@ class RobotController:
             with self.lock:
                 self.phase = "IDLE"
             return
+        move_word = "下放" if descend else "抬升"
         # legs=None 表示整机 12 关节；否则只取这些腿（前缀 fl/fr/rl/rr）
         if legs:
             active = [jt for jt in self.joints
                       if jt["name"].split("_")[0] in legs]
-            scope = "单腿测试 [" + ", ".join(sorted(legs)) + "]"
+            scope = f"单腿{'坐下' if descend else '测试'} [" + ", ".join(sorted(legs)) + "]"
         else:
             active = list(self.joints)
-            scope = "整机站立"
+            scope = "整机坐下" if descend else "整机站立"
         if not active:
             self.append(f"[错误] 没有匹配的关节: {legs}")
             self._notify(f"没有匹配的关节：{legs}")
@@ -711,10 +726,15 @@ class RobotController:
             self.current = dict(res)
             self.current_ok = dict(oks)
 
+        # 站立以「趴姿」为基准、坐下以「站姿」为基准；坐下是向下+重力辅助+按相对量(cur−Δ)走，
+        # 落点最差只是离趴姿差一点、不危险，故坐下默认不因姿势偏差拒绝（硬校验仍生效）。
+        base_key = "stand_rotor" if descend else "prone_rotor"
+        pose_word = "站姿" if descend else "趴姿"
+        verify_pose = not (skip_verify or descend)
         cfg_joints = {j["name"]: j for j in cfg["joints"]}
         cur, prone, delta, tff_t = {}, {}, {}, {}
         hard_bad = []   # 配置缺失 / 无响应：无法执行，「关闭安全校验」也不能绕过
-        dev_bad = []    # 趴姿偏差超阈值：安全校验项，可被「关闭安全校验」跳过
+        dev_bad = []    # 姿势偏差超阈值：安全校验项，可被「关闭安全校验」/坐下跳过
         with self.lock:
             self.last_dev = {}
         for jt in active:
@@ -729,7 +749,7 @@ class RobotController:
             # 单圈绝对编码器：圈数掉电清零，同一物理位置的读数可能差整数个 2π(转子，≈56.9°关节)。
             # 站立按相对量(当前+Δ)走、不受影响；偏差按整圈归一到 ±π 再比阈值，避免被误判拒绝。
             two_pi = 2 * math.pi
-            raw_dev = res[n] - cj["prone_rotor"]
+            raw_dev = res[n] - cj[base_key]
             turns = round(raw_dev / two_pi)
             dev = abs(raw_dev - turns * two_pi)
             with self.lock:
@@ -737,7 +757,7 @@ class RobotController:
             if dev > thr:
                 dev_bad.append(f"{n}(偏差 {dev:.3f} > {thr})")
             elif turns != 0:
-                self.append(f"  [{n}] 读数比趴姿差 {turns:+d} 个转子整圈"
+                self.append(f"  [{n}] 读数比{pose_word}差 {turns:+d} 个转子整圈"
                             f"(≈{turns*360.0/GEAR_RATIO:+.0f}°关节)，已按整圈归一校验（单圈编码器掉电圈数清零所致，正常）。")
             cur[n] = res[n]
             prone[n] = cj["prone_rotor"]
@@ -755,36 +775,42 @@ class RobotController:
                 self.phase = "CONFIGURED"
             return
 
-        if dev_bad and not skip_verify:
+        if dev_bad and verify_pose:
             msg = "安全校验未通过，拒绝执行：" + "，".join(dev_bad)
             self.append(f"[拒绝] {msg}")
-            self.append("       请确认机器人已自然趴好、电机处于电机模式，再重试。")
-            self.append("       （如确需在非趴姿下测试，可勾选「关闭安全校验」后再点「只测这条腿」。）")
+            self.append(f"       请确认机器人已自然{pose_word[0]}好、电机处于电机模式，再重试。")
+            self.append("       （如确需在非标定姿态下测试，可勾选「关闭安全校验」后再点「只测这条腿」。）")
             self.set_status("执行被拒绝（安全校验未通过）")
             self._notify("⛔ 安全校验未通过，已拒绝执行：\n\n" + "，".join(dev_bad)
-                         + "\n\n请确认这条腿已自然趴好（各关节贴近标定趴姿）、电机处于电机模式后重试；"
-                           "若只想验证电机方向，可改用「方向验证」（不要求趴姿）。")
+                         + f"\n\n请确认这条腿各关节贴近标定{pose_word}、电机处于电机模式后重试；"
+                           "若只想验证电机方向，可改用「方向验证」（不要求姿态）。")
             with self.lock:
                 self.phase = "CONFIGURED"
             return
 
-        if dev_bad and skip_verify:
-            self.append("[⚠️ 安全校验已关闭] 跳过趴姿偏差检查，强行按『当前角 + Δ』移动："
+        sgn = -1.0 if descend else 1.0   # 坐下 = 当前 − Δ 回趴姿；站立 = 当前 + Δ 到站姿
+        if dev_bad and descend:
+            self.append(f"[坐下] 与标定站姿有偏差（{'，'.join(dev_bad)}），仍按『当前角 − Δ』向下回趴姿；"
+                        "坐下是重力辅助、按相对量移动，落点最差只是离趴姿差一点，正常。")
+            self.set_status(f"{scope}：执行中（下放）")
+        elif dev_bad and skip_verify:
+            self.append("[⚠️ 安全校验已关闭] 跳过姿势偏差检查，强行按『当前角 + Δ』移动："
                         + "，".join(dev_bad))
             self.append("       危险：若该腿离趴姿较远会大幅运动！请盯住急停。")
             self.set_status(f"{scope}：⚠️ 已关闭安全校验，执行中")
         else:
-            self.append(f"[通过] {len(active)} 个关节贴近配置趴姿（阈值 {thr} rad）。")
+            self.append(f"[通过] {len(active)} 个关节贴近配置{pose_word}（阈值 {thr} rad）。")
 
-        # 目标 = 当前 + delta
-        targets = {n: cur[n] + delta[n] for n in cur}
+        # 目标 = 当前 + sgn·delta（站立 +Δ 到站姿 / 坐下 −Δ 回趴姿）
+        targets = {n: cur[n] + sgn * delta[n] for n in cur}
         vmax_rotor = vmax_joint * GEAR_RATIO
 
-        # 分段站立：按 STAGE_ORDER(小腿→大腿→hip) 把关节分组，每段单独限速插值，
-        # 上一段到位并保持后再启动下一段，降低同时抬升的峰值力矩/电流。
+        # 分段：站立按 STAGE_ORDER(小腿→大腿→hip) 抬升；坐下按反序(hip→大腿→小腿)下放。
+        # 每段单独限速插值，上一段到位并保持后再启动下一段，降低同时驱动的峰值力矩/电流。
         # staged=False 时退化为「全关节同时插值」（一段）。
+        stage_seq = tuple(reversed(STAGE_ORDER)) if descend else STAGE_ORDER
         if staged:
-            stages = [(jt, grp) for jt in STAGE_ORDER
+            stages = [(jt, grp) for jt in stage_seq
                       if (grp := [n for n in cur if n.split("_")[1] == jt])]
             other = [n for n in cur if n.split("_")[1] not in STAGE_ORDER]
             if other:
@@ -801,11 +827,12 @@ class RobotController:
         total_dur = sum(s[3] for s in stage_plan)
 
         nz_tff = {n: v for n, v in tff_t.items() if abs(v) > 1e-9}
+        ramp_note = "（按下放进度 满→0 施加）" if descend else "（按抬起进度 0→满 施加）"
         tff_note = ("，前馈力矩(转子N·m): " + "，".join(f"{n}={v:+.2f}" for n, v in nz_tff.items())
-                    + "（按抬起进度 0→满 施加）") if nz_tff else "，无前馈力矩"
+                    + ramp_note) if nz_tff else "，无前馈力矩"
         if staged:
             seq = " → ".join(f"{jt}({len(grp)})" for jt, grp, *_ in stage_plan)
-            self.append(f"[轨迹] {scope}：分段抬升 {seq}，限速 {vmax_joint} rad/s(关节) "
+            self.append(f"[轨迹] {scope}：分段{move_word} {seq}，限速 {vmax_joint} rad/s(关节) "
                         f"=> 总时长 {total_dur:.2f}s, K_P={kp} K_W={kw}{tff_note}")
         else:
             max_move = max((abs(targets[n] - cur[n]) for n in cur), default=0.0)
@@ -830,15 +857,15 @@ class RobotController:
         for jt_name, grp, smax, sdur, Ns in stage_plan:
             grpset = set(grp)
             if staged:
-                self.append(f"[分段] 抬升 {jt_name}（{len(grp)} 关节，最大位移 {smax:.3f} rad，约 {sdur:.2f}s），其余关节保持。")
-                self.set_status(f"{scope}：抬升 {jt_name} 中（约 {sdur:.1f}s）")
+                self.append(f"[分段] {move_word} {jt_name}（{len(grp)} 关节，最大位移 {smax:.3f} rad，约 {sdur:.2f}s），其余关节保持。")
+                self.set_status(f"{scope}：{move_word} {jt_name} 中（约 {sdur:.1f}s）")
             for k in range(1, Ns + 1):
                 if self.abort.is_set():
                     self.append("[中止] 收到急停/中止，停止插值。")
                     self._stop_servos()
                     with self.lock:
                         self.phase = "CONFIGURED"
-                    self.set_status("站立已中止")
+                    self.set_status(f"{'坐下' if descend else '站立'}已中止")
                     return
                 a = k / Ns  # 本段 0->1 线性插值
                 for port, jts in groups.items():
@@ -847,15 +874,17 @@ class RobotController:
                         n = j["name"]
                         if n not in cur:
                             continue
-                        if n in grpset:                 # 本段正在抬升：0->满
+                        # 站立：未轮到=趴位无前馈 / 在动=0→目标、前馈 0→满 / 完成=目标位+满前馈
+                        # 坐下：未轮到=仍站位+满前馈(还撑着) / 在动=站→趴、前馈 满→0 / 完成=趴位无前馈
+                        if n in grpset:                 # 本段正在移动
                             pos = cur[n] + a * (targets[n] - cur[n])
-                            tff = a * tff_t.get(n, 0.0)
-                        elif n in done:                 # 已抬升完：保持在目标位+满前馈
+                            tff = ((1.0 - a) if descend else a) * tff_t.get(n, 0.0)
+                        elif n in done:                 # 本段已完成
                             pos = targets[n]
-                            tff = tff_t.get(n, 0.0)
-                        else:                           # 还没轮到：维持当前(趴)位，不加前馈
+                            tff = 0.0 if descend else tff_t.get(n, 0.0)
+                        else:                           # 还没轮到
                             pos = cur[n]
-                            tff = 0.0
+                            tff = tff_t.get(n, 0.0) if descend else 0.0
                         parts.append(f"{j['id']} {pos:.5f} {tff:.4f}")
                     proc = self.servo_procs.get(port)
                     if proc and proc.poll() is None and parts:
@@ -867,12 +896,48 @@ class RobotController:
                 time.sleep(dt)
             done.update(grpset)
 
-        self.append(f"[完成] {scope}到位，servo 进程持续保持位置（点「急停/松开」释放）。")
-        if legs:
-            self.append("       请检查这条腿：是否朝『站起来』方向收拢？哪个关节方向不对就反它的标定。")
-        self.set_status(f"{scope}到位（保持中）")
+        # -- 闭环到位判定：插值发完 ≠ 电机真到位。等保持稳定后读实测跟踪误差(errd, 关节°)，
+        #    超容差就明确报「未到位」，避免「显示到位、实则力矩/电流不足没顶上去」的误导。--
+        reach_tol = float(exo.get("reach_tol_deg", ex.get("reach_tol_deg", 3.0)))
+        time.sleep(0.6)  # 等 PD 稳态 + 至少刷新一帧新反馈
         with self.lock:
-            self.phase = "STANDING"
+            fb = {jt["name"]: dict(self.feedback.get(jt["name"], {})) for jt in active}
+        over, miss, errs = [], [], []
+        for jt in active:
+            e = fb[jt["name"]].get("errd")
+            if e is None:
+                miss.append(jt["name"])
+                continue
+            errs.append(abs(e))
+            if abs(e) > reach_tol:
+                over.append((jt["name"], e))
+        max_err = max(errs, default=None)
+
+        if over:
+            over.sort(key=lambda x: -abs(x[1]))
+            detail = "，".join(f"{n} 差{e:+.1f}°" for n, e in over[:6])
+            more = f" 等{len(over)}个" if len(over) > 6 else ""
+            self.append(f"[未到位] {scope} 指令已发完并锁位保持，但 {len(over)} 个关节实测未到位"
+                        f"（容差 {reach_tol:.1f}°）：{detail}{more}。")
+            self.append("        多半是力矩/电流不足顶不上去：看扭矩监控 fb_tau 是否已饱和；"
+                        "可加重力前馈 t_ff / 提 kp / 上调驱动器电流上限。")
+            self.set_status(f"{scope} 保持中（⚠️ {len(over)} 关节未到位，最大 {max_err:.1f}°）")
+            self._notify(f"⚠️ {scope} 显示保持但实测未到位：{len(over)} 个关节超 {reach_tol:.1f}°，"
+                         f"最大 {max_err:.1f}°。\n\n{detail}{more}\n\n疑似力矩/电流不足，请看扭矩监控。")
+        else:
+            tail = (f"（最大跟踪误差 {max_err:.1f}° < 容差 {reach_tol:.1f}°）"
+                    if max_err is not None else "（⚠️ 无反馈数据，未能核对实测误差）")
+            self.append(f"[完成] {scope}到位并保持{tail}，servo 进程持续保持位置（点「急停/松开」释放）。")
+            self.set_status(f"{scope}到位（保持中）")
+        if miss:
+            self.append(f"        注意：{len(miss)} 个关节无反馈(errd)，未纳入核对：{', '.join(miss)}。")
+        if legs and not descend:
+            self.append("       请检查这条腿：是否朝『站起来』方向收拢？哪个关节方向不对就反它的标定。")
+        with self.lock:
+            self.hold_targets = dict(targets)   # 记录保持目标，供「单关节微调」做增量基准
+            # 坐下后落在趴姿、重量在地面，保持前馈归零；站立保持满前馈顶住重力。
+            self.hold_tff = {n: 0.0 for n in targets} if descend else dict(tff_t)
+            self.phase = "PRONE_HOLD" if descend else "STANDING"
 
     # -- 方向验证：单腿，每个关节从当前位置朝「站立方向」各转固定角度（默认 10°）--
     # 与站立不同：不要求处于趴姿（不做 prone 偏差校验），只做小幅相对位移验证方向符号。
@@ -1007,7 +1072,85 @@ class RobotController:
         self.append("       哪个关节往反方向转 = 那个关节标定方向标反了。点「急停/松开」释放。")
         self.set_status(f"{scope}到位（保持中）")
         with self.lock:
+            self.hold_targets = dict(targets)   # 记录保持目标，供「单关节微调」做增量基准
+            self.hold_tff = {n: 0.0 for n in targets}   # 方向验证不加前馈
             self.phase = "STANDING"
+
+    # -- 单关节微调：站立/测试到位、电机锁位保持时，对某个关节缓慢加/减一个小角度 --
+    # 在已有的保持目标 hold_targets 上增量，限速插值；其余关节维持原保持位+前馈不动。
+    # 调用前 run() 已做：处于保持中、未忙、过了 2s 安全间隔的校验，并已设 busy=True。
+    def _do_jog(self, name, sign, deg):
+        try:
+            self._jog_impl(name, sign, deg)
+        except Exception as e:
+            self.append(f"[异常] 单关节微调出错: {e}")
+            self.set_status(f"微调异常: {e}")
+            self._notify(f"单关节微调出错：{e}")
+        finally:
+            with self.lock:
+                self.busy = False
+
+    def _jog_impl(self, name, sign, deg):
+        jt = next((j for j in self.joints if j["name"] == name), None)
+        if jt is None:
+            self.append(f"[微调] 未知关节 {name}")
+            return
+        port = jt["port"]
+        with self.lock:
+            proc = self.servo_procs.get(port)
+            alive = proc is not None and proc.poll() is None
+            targets = dict(self.hold_targets)
+            tffs = dict(self.hold_tff)
+        if not alive or name not in targets:
+            self.append(f"[微调] 拒绝：{name} 当前未处于锁位保持（{port} 无存活 servo 或无保持目标）。")
+            self._notify("该关节当前未在锁位保持，无法微调：请先站立/单腿测试到位（电机保持）后再调。", "warn")
+            return
+
+        # 该总线上、当前在保持的所有关节都要每行重发，否则其余关节会丢失锁位
+        port_joints = [j for j in self.joints
+                       if j["port"] == port and j["name"] in targets]
+        step_rotor = sign * math.radians(deg) * GEAR_RATIO
+        start = targets[name]
+        end = start + step_rotor
+        rate = 100.0
+        vmax_rotor = JOG_VMAX * GEAR_RATIO
+        duration = max(0.4, abs(step_rotor) / vmax_rotor if vmax_rotor > 0 else 0.4)
+        N = max(1, int(duration * rate))
+        dt = 1.0 / rate
+        s0 = math.degrees(start / GEAR_RATIO)
+        s1 = math.degrees(end / GEAR_RATIO)
+        arrow = "＋" if sign > 0 else "－"
+        self.append(f"[微调] {name} {arrow}{deg:.1f}°(关节)：{s0:.2f}° → {s1:.2f}°，限速 "
+                    f"{JOG_VMAX} rad/s、约 {duration:.1f}s；其余关节保持不动。")
+        self.set_status(f"微调 {name} {arrow}{deg:.1f}°（约 {duration:.1f}s）")
+
+        for k in range(1, N + 1):
+            if self.abort.is_set():
+                self.append("[微调] 收到急停/中止，停止微调。")
+                return
+            with self.lock:
+                proc = self.servo_procs.get(port)
+            if proc is None or proc.poll() is not None:
+                self.append(f"[微调] {port} 的 servo 已结束（可能已松开），停止微调。")
+                return
+            a = k / N
+            parts = []
+            for j in port_joints:
+                n = j["name"]
+                pos = (start + a * step_rotor) if n == name else targets[n]
+                parts.append(f"{j['id']} {pos:.5f} {tffs.get(n, 0.0):.4f}")
+            try:
+                proc.stdin.write(" ".join(parts) + "\n")
+                proc.stdin.flush()
+            except (BrokenPipeError, OSError):
+                self.append(f"[微调] servo {port} 管道已断开，停止微调。")
+                return
+            time.sleep(dt)
+
+        with self.lock:
+            self.hold_targets[name] = end   # 新位置成为后续微调/保持的基准
+        self.append(f"[微调] 完成：{name} 现保持在 {s1:.2f}°(关节)。{JOG_COOLDOWN:.0f}s 后可继续微调。")
+        self.set_status(f"微调完成：{name} = {s1:.2f}°（保持中）")
 
     # -- 急停 / 释放 --
     def _estop(self):
@@ -1068,13 +1211,19 @@ class RobotController:
             ok, msg = self._save_config()
             return ok, msg
 
-        if action == "stand":
+        if action == "sit":
+            # 坐下功能暂时禁用（代码有问题）。即便绕过前端直接调 API 也一律拒绝。
+            return False, "坐下功能已禁用（代码有问题，暂不可用）"
+
+        if action in ("stand", "sit"):
+            descend = action == "sit"
+            verb = "坐下" if descend else "站立"
             if busy:
                 return False, "忙：请等待当前操作完成"
             if standing:
-                return False, "已在执行站立"
+                return False, f"已在执行动作（{verb}）"
             if self.config is None:
-                return False, "尚未标定保存配置，无法站立"
+                return False, f"尚未标定保存配置，无法{verb}"
             kp = parse_opt_gain(p.get("kp", ""))
             kw = parse_opt_gain(p.get("kw", ""))
             if kp == "ERR" or kw == "ERR":
@@ -1097,11 +1246,11 @@ class RobotController:
                 exo["verify_threshold_rad"] = thr
             if tff is not None:
                 exo["t_ff"] = tff
-            # 分段站立开关：页面复选框，默认开（小腿→大腿→hip 依次抬升）
+            # 分段开关：页面复选框，默认开（站立 小腿→大腿→hip 抬升；坐下 反序下放）
             exo["staged"] = str(p.get("staged", "1")).strip() in ("1", "true", "True", "on")
             self.abort.clear()
             t = threading.Thread(target=self._do_stand,
-                                 kwargs={"kp": kp, "kw": kw, "ex_override": exo},
+                                 kwargs={"kp": kp, "kw": kw, "ex_override": exo, "descend": descend},
                                  daemon=True)
             with self.lock:
                 self.standing_thread = t
@@ -1208,6 +1357,45 @@ class RobotController:
             except (TypeError, ValueError):
                 return False, "前馈力矩必须是数字（单位：N·m）"
             return self._set_feedforward(name, tff)
+
+        if action == "jog":
+            if busy:
+                return False, "忙：请等待当前操作完成"
+            if standing:
+                return False, "正在执行动作，请等到位保持后再微调"
+            name = str(p.get("name", "")).strip()
+            if not name:
+                return False, "缺少关节名"
+            direction = str(p.get("dir", "")).strip()
+            if direction in ("+", "plus", "up"):
+                sign = 1
+            elif direction in ("-", "minus", "down"):
+                sign = -1
+            else:
+                return False, "方向必须是 + 或 -"
+            try:
+                deg = float(p.get("deg", JOG_STEP_MAX))
+            except (TypeError, ValueError):
+                return False, "角度必须是数字（单位：度）"
+            deg = max(0.1, min(JOG_STEP_MAX, deg))   # 每次最多 5°，防误填大角度
+            # 必须处于锁位保持，且过了安全间隔
+            with self.lock:
+                holding = any(pp.poll() is None for pp in self.servo_procs.values())
+                held = name in self.hold_targets
+                last = self.jog_last.get(name, 0.0)
+            if not holding or not held:
+                return False, "请先站立/单腿测试到位（电机锁位保持）后，再微调该关节"
+            now = time.monotonic()
+            remain = JOG_COOLDOWN - (now - last)
+            if remain > 0:
+                return False, f"安全间隔：请 {remain:.1f}s 后再微调 {name}"
+            with self.lock:
+                self.jog_last[name] = now
+                self.busy = True
+            self.abort.clear()
+            threading.Thread(target=self._do_jog, args=(name, sign, deg),
+                             daemon=True).start()
+            return True, "ok"
 
         return False, f"未知操作: {action}"
 
@@ -1349,7 +1537,8 @@ PAGE = r"""<!DOCTYPE html>
       </div>
       <div>
         <button class="stand" id="btnStand" onclick="confirmStand()">🧍 站立</button>
-        <button class="stand" style="background:#777;border-color:#777" disabled title="后续">🪑 坐下</button>
+        <button class="stand" id="btnSit" style="background:#777; border-color:#777"
+                disabled title="坐下功能暂时禁用（代码有问题）">🪑 坐下（已禁用）</button>
         <div id="standParams" style="margin:10px 0 0;max-width:430px">
           <div class="muted" style="font-size:12px;margin-bottom:6px">
             <b style="color:var(--fg)">整机站立参数</b>（留空=用配置 <code>execute</code> 默认值，灰字即当前默认；填了则临时覆盖，<b>不</b>写回配置）：
@@ -1467,6 +1656,38 @@ PAGE = r"""<!DOCTYPE html>
     <p class="muted" style="font-size:12.5px;margin:8px 0 0">
       「趴→站」从趴姿走到站姿（要求当前≈趴姿）；「方向验证」不要求趴姿——选一个电机(hip/thigh/shank)，从当前位置朝配置里的站立方向转设定角度，**一次只驱一个电机**、专门核对该电机方向符号对不对。
       上面的 <b>K_P / K_W</b> 同时作用于这两个单腿动作：留空则各自沿用配置 <code>execute</code> 里的默认值（输入框灰字即当前默认值）；填了就临时覆盖（不写回配置文件）。调小 K_P 更软更安全，调大更硬跟随更紧。
+    </p>
+  </fieldset>
+
+  <fieldset>
+    <legend>单关节微调（站立保持时，缓慢调整某关节角度以找更好站姿）</legend>
+    <div class="row">
+      <label>关节</label>
+      <select id="jogJoint">
+        <option value="fl_hip">左前 FL · hip 髋</option>
+        <option value="fl_thigh">左前 FL · thigh 大腿</option>
+        <option value="fl_shank">左前 FL · shank 小腿</option>
+        <option value="fr_hip">右前 FR · hip 髋</option>
+        <option value="fr_thigh">右前 FR · thigh 大腿</option>
+        <option value="fr_shank">右前 FR · shank 小腿</option>
+        <option value="rl_hip">左后 RL · hip 髋</option>
+        <option value="rl_thigh">左后 RL · thigh 大腿</option>
+        <option value="rl_shank">左后 RL · shank 小腿</option>
+        <option value="rr_hip">右后 RR · hip 髋</option>
+        <option value="rr_thigh">右后 RR · thigh 大腿</option>
+        <option value="rr_shank">右后 RR · shank 小腿</option>
+      </select>
+      <label title="每次微调的角度（关节°），最大 10°">步长°</label>
+      <input id="jogDeg" type="number" min="0.1" max="10" step="0.5" value="5" oninput="boundInput(this)" onchange="boundClamp(this)" style="width:64px; padding:5px 7px; border:1px solid var(--bd); border-radius:6px; font-size:14px">
+      <button id="btnJogMinus" class="primary" onclick="jog(-1)" disabled style="font-size:18px;min-width:48px">−</button>
+      <button id="btnJogPlus" class="primary" onclick="jog(1)" disabled style="font-size:18px;min-width:48px">＋</button>
+      <span id="jogHint" style="font-size:12.5px;color:var(--warn);font-weight:600"></span>
+      <span class="muted" id="jogTip" style="font-size:12.5px">需先站立/单腿测试到位、电机锁位保持后才可微调。</span>
+    </div>
+    <p class="muted" style="font-size:12.5px;margin:8px 0 0">
+      在当前保持位上对所选关节缓慢加(＋)/减(−)一个角度，<b>每次最多 10°</b>、限速移动，其余关节维持不动。
+      为安全，两次微调间隔至少 <b>1 秒</b>（按钮会短暂禁用并倒计时）；想多调就一次次点。随时可按<b>空格/急停</b>松开。
+      微调只是临时改保持位、<b>不</b>写回站姿配置；调到满意后若要存为新站姿，用下方「手动修改姿态角度」的「↺ 取当前电机角」写入 stand。
     </p>
   </fieldset>
 
@@ -1621,6 +1842,17 @@ PAGE = r"""<!DOCTYPE html>
     if(confirm('确认执行整机站立？\n\n'+note+'\n\n请确保：机器人已自然趴好、周围无人无障碍、可随时按急停。'))
       api('stand', o);
   }
+  // 坐下：站立的反向，复用同一套整机参数（速度/时长/频率/前馈/分段）；阈值对坐下不拦截
+  function confirmSit(){
+    const o=standParams();
+    const dv=(id,def)=>{ const el=document.getElementById(id); return el.value.trim()!=='' ? el.value.trim() : (el.placeholder||def); };
+    const note='本次参数：K_P='+dv('stKp','默认')+'  K_W='+dv('stKw','默认')
+      +'  速度='+dv('stVmax','默认')+'rad/s  最小时长='+dv('stMinDur','默认')+'s'
+      +'  频率='+dv('stRate','默认')+'Hz  前馈='+dv('stTff','默认')+'N·m'
+      +'\n下放方式：'+(o.staged==='1'?'分段反序（hip→大腿→小腿）':'整机同时')+'，前馈随下放 满→0';
+    if(confirm('确认执行整机坐下（回趴姿）？\n\n'+note+'\n\n请确保：机器人正站立保持、落点处无障碍、可随时按急停。'))
+      api('sit', o);
+  }
   // 读单腿验证用的 K_P / K_W：留空则不传，后端沿用配置默认值
   function legGains(){
     const g = {};
@@ -1696,6 +1928,29 @@ PAGE = r"""<!DOCTYPE html>
     const cur=(j&&j.t_ff!==undefined&&j.t_ff!==null)?parseFloat(j.t_ff).toFixed(3):'0';
     if(confirm('把 '+name+' 的前馈力矩设为 '+tff.toFixed(3)+' N·m（转子侧）？\n\n当前值：'+cur+' N·m\n\n会写回 stand_config.json；站立时按抬起进度 0→该值 施加、保持阶段维持。\n\n⚠ 符号要与“顶住自重”的方向一致；先用较小值试，改完需重新编译 motor_ctrl。'))
       api('set_feedforward',{name,tff});
+  }
+  // 单关节微调：在保持位上对所选关节加/减步长（≤5°）。客户端 2s 冷却 + 后端 2s 安全间隔双保险。
+  let jogCooldownUntil = 0;       // 客户端冷却截止时间戳(ms)
+  function jog(sign){
+    const name=document.getElementById('jogJoint').value;
+    let deg=parseFloat(document.getElementById('jogDeg').value);
+    if(isNaN(deg)||deg<=0) deg=5;
+    deg=Math.min(10, deg);
+    api('jog', {name, dir: sign>0?'+':'-', deg});
+    jogCooldownUntil = Date.now() + 1000;   // 1s 安全间隔，期间禁用按钮并倒计时
+    document.getElementById('btnJogPlus').disabled = true;
+    document.getElementById('btnJogMinus').disabled = true;
+    tickJogCooldown();
+  }
+  function tickJogCooldown(){
+    const remain = jogCooldownUntil - Date.now();
+    const hint=document.getElementById('jogHint');
+    if(remain>0){
+      hint.textContent = '安全间隔：'+(remain/1000).toFixed(1)+'s 后可继续';
+      setTimeout(tickJogCooldown, 100);
+    } else {
+      hint.textContent='';   // 按钮可用性由 render() 按 holding 状态恢复
+    }
   }
   // 扭矩监控：峰值/历史、设置持久化、柱状图 + 力矩-时间曲线
   const tqHistory={};          // name -> [{t, v(signed 转子N·m, 或 null)}]
@@ -1924,9 +2179,20 @@ PAGE = r"""<!DOCTYPE html>
     document.getElementById('pronePill').textContent = '趴姿: ' + (s.has_prone?'已记录':'未记录');
     document.getElementById('standPill').textContent = '站姿: ' + (s.has_stand?'已记录':'未记录');
     document.getElementById('btnStand').disabled = !s.configured || s.busy || s.standing;
+    // 坐下功能暂时禁用（代码有问题）：始终保持禁用，不随状态恢复
+    document.getElementById('btnSit').disabled = true;
     document.getElementById('btnTestLeg').disabled = !s.configured || s.busy || s.standing;
     document.getElementById('btnDirTest').disabled = !s.configured || s.busy || s.standing;
     document.getElementById('status').textContent = s.status;
+
+    // 单关节微调：按钮始终可点（仅 1s 安全间隔内短暂禁用）；未保持时点击由后端返回明确提示，
+    // 避免「点了没反应、也不知道为什么」。
+    const inCooldown = Date.now() < jogCooldownUntil;
+    document.getElementById('btnJogPlus').disabled = inCooldown;
+    document.getElementById('btnJogMinus').disabled = inCooldown;
+    document.getElementById('jogTip').textContent = s.holding
+      ? '电机保持中，可微调；每次≤10°、间隔1s。'
+      : '⚠ 当前未在锁位保持：请先站立 / 单腿测试到位（电机保持）后再微调，否则点击会被拒绝。';
 
     // K_P/K_W 留空时实际生效的是配置 execute 里的默认值；把默认值显示到输入框灰字 placeholder
     if (s.execute){
