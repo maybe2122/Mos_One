@@ -1,0 +1,132 @@
+# =============================================================================
+# mos2026_2 — real-robot deployment config (rl_sar-compatible schema)
+# =============================================================================
+# This file does double duty:
+#
+#   1. The top-level `mos2026_2:` block follows fan-ziqi/rl_sar's config.yaml
+#      schema (observations / scales / action_scale / rl_kp / rl_kd /
+#      torque_limits / default_dof_pos / decimation / dt ...).  Drop it under
+#      rl_sar's `policy/mos2026_2/config.yaml` together with the TorchScript
+#      model produced by `deploy/real/policy_export.py` and rl_sar's RL core
+#      will reproduce *exactly* the contract this robot was trained on.
+#
+#   2. The extra `hardware:` block wires the 12 logical joints to the real
+#      Unitree GO-M8010-6 serial buses and carries the sim<->motor coordinate
+#      mapping.  rl_sar's upstream drivers speak Unitree DDS/UDP and CANNOT
+#      drive these serial motors, so the standalone node in this folder
+#      (`rl_deploy.py`) consumes `hardware:` to talk to `motor_ctrl servo`.
+#
+# EVERY number under `mos2026_2:` is copied verbatim from the trained Isaac Lab
+# env (mos2026_2_closed_usd_env_cfg.py) and the validated MuJoCo deploy
+# (deploy/mujoco/play_mujoco.py).  Do not "tune" them here — they define the
+# policy's input/output contract; changing them silently breaks the policy.
+# =============================================================================
+
+mos2026_2:
+  model_name: "policy.pt"          # TorchScript model from policy_export.py
+
+  # ----- observation contract (45 dims, NO commands, NO scaling) -------------
+  # Matches mos2026_2_closed_usd_env._get_observations() exactly:
+  #   root_lin_vel_b(3) + root_ang_vel_b(3) + projected_gravity_b(3)
+  #   + (joint_pos - default)(12) + joint_vel(12) + prev_action(12) = 45
+  # The env applies NO observation scaling and NO normalization
+  # (actor_obs_normalization=False), so every *_scale below is 1.0.
+  num_observations: 45
+  observations: ["lin_vel", "ang_vel", "gravity_vec", "dof_pos", "dof_vel", "actions"]
+  observations_history: []          # no frame stacking
+  observations_history_priority: "time"
+  clip_obs: 100.0
+  lin_vel_scale: 1.0
+  ang_vel_scale: 1.0
+  dof_pos_scale: 1.0
+  dof_vel_scale: 1.0
+  commands_scale: [1.0, 1.0, 1.0]   # unused (no "commands" in observations)
+
+  # ----- action contract -----------------------------------------------------
+  # _pre_physics_step: a = clip(action, -1.5, 1.5);  target = action_scale*a + default
+  # rl_sar has no separate "action_clip", so we fold ±1.5 into clip_actions_*.
+  clip_actions_lower: [-1.5, -1.5, -1.5, -1.5, -1.5, -1.5, -1.5, -1.5, -1.5, -1.5, -1.5, -1.5]
+  clip_actions_upper: [ 1.5,  1.5,  1.5,  1.5,  1.5,  1.5,  1.5,  1.5,  1.5,  1.5,  1.5,  1.5]
+  num_of_dofs: 12
+  wheel_indices: []
+  # Per-joint action scale (env_cfg.action_scale): 0.5 hips, 0.8145 thigh/shank.
+  action_scale: [0.5,    0.5,    0.5,    0.5,
+                 0.8145, 0.8145, 0.8145, 0.8145,
+                 0.8145, 0.8145, 0.8145, 0.8145]
+
+  # ----- on-robot PD (joint-space position control) --------------------------
+  # Training used ImplicitActuator stiffness=25, damping=0.5 (joint side).
+  # These run inside the GO-M8010-6 (rl_deploy converts to rotor-side K_P/K_W).
+  rl_kp: [25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0]
+  rl_kd: [0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5]
+  # Softer gains used while interpolating into the stand pose (getup ramp).
+  fixed_kp: [12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0]
+  fixed_kd: [0.8,  0.8,  0.8,  0.8,  0.8,  0.8,  0.8,  0.8,  0.8,  0.8,  0.8,  0.8]
+
+  # GO-M8010-6 rated peak is 23.7 N*m; training capped effort at 12 N*m. We
+  # protect at 12 N*m (joint side) so the deploy node refuses commands the
+  # motors were never trained to exceed.  See README "torque margin" blocker.
+  torque_limits: [12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0]
+
+  # ----- default joint pose (radians, policy/sim frame) ----------------------
+  # = Mos20262ClosedUsdEnvCfg.init_state.joint_pos for the 12 actuated joints,
+  # in the joint order below.  The obs subtracts this; actions add it back.
+  default_dof_pos: [ 0.15,  0.15, -0.15, -0.15,
+                     0.00,  0.00,  0.00,  0.00,
+                     0.00,  0.00,  0.00,  0.00]
+
+  # Joint order = policy/action order (env_cfg.actuated_joint_names).
+  joint_names: ["fl_hip", "fr_hip", "rl_hip", "rr_hip",
+                "fl_thigh", "fr_thigh", "rl_thigh", "rr_thigh",
+                "fl_shank", "fr_shank", "rl_shank", "rr_shank"]
+  joint_mapping: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+
+  # ----- timing --------------------------------------------------------------
+  dt: 0.005          # 200 Hz physics
+  decimation: 4      # -> 50 Hz policy control (matches training)
+
+# =============================================================================
+# hardware: serial wiring + sim<->motor coordinate mapping (rl_deploy.py only)
+# =============================================================================
+# Conversion (per joint), done in motor_bus.py:
+#
+#   rotor_target = stand_rotor + GEAR * dir * sim_sign * (q_sim - default_dof_pos)
+#   q_sim_meas   = default + (rotor_meas - stand_rotor) / (GEAR * dir * sim_sign)
+#   qdot_sim     = motor_W / (GEAR * dir * sim_sign)
+#
+# Reasoning: at the sim default pose (q_sim = default_dof_pos) the robot stands,
+# so the rotor must be at the *calibrated* standing rotor angle `stand_rotor`.
+# `dir` (motor-vs-joint sign) and `stand_rotor` come straight from
+# motor_control/config/stand_config.json.  `sim_sign` (+1/-1) absorbs any
+# sign mismatch between the USD/sim joint axis and the motor's joint axis and
+# MUST be verified on hardware before any RL run (see README step 4).
+hardware:
+  gear_ratio: 6.33
+  control_hz: 50               # policy decision rate; must equal dt*decimation^-1
+  motor_ctrl_bin: "../../motor_control/Linux/build/motor_ctrl"
+  stand_config: "../../motor_control/config/stand_config.json"
+  # ang_vel / gravity_vec source. "stub" = zeros (SAFE, robot will NOT balance);
+  # set to "serial"/"udp" once a real IMU driver is wired in state_sources.py.
+  imu_source: "stub"
+  # base linear velocity source for obs[0:3]. The trained policy needs TRUE
+  # base lin vel which no sensor provides. "zero" feeds 0 (policy degraded but
+  # safe to bring up), "command" feeds the commanded velocity as a proxy.
+  # The correct fix is to retrain without lin_vel or with a HIM estimator (him/).
+  lin_vel_source: "zero"
+
+  # Per-joint serial map, in the SAME order as joint_names above (policy order).
+  # port/motor_id from motor_control/config/joint_map.default.json;
+  # dir/stand_rotor seeded from stand_config.json; sim_sign defaults +1 (VERIFY).
+  joints:
+    - {name: fl_hip,   port: /dev/ttyUSB0, id: 1,  dir: -1, stand_rotor:  3.449738, sim_sign: 1}
+    - {name: fr_hip,   port: /dev/ttyUSB1, id: 4,  dir:  1, stand_rotor:  6.963330, sim_sign: 1}
+    - {name: rl_hip,   port: /dev/ttyUSB2, id: 7,  dir:  1, stand_rotor:  4.168216, sim_sign: 1}
+    - {name: rr_hip,   port: /dev/ttyUSB3, id: 10, dir: -1, stand_rotor:  3.533338, sim_sign: 1}
+    - {name: fl_thigh, port: /dev/ttyUSB0, id: 2,  dir:  1, stand_rotor:  8.279488, sim_sign: 1}
+    - {name: fr_thigh, port: /dev/ttyUSB1, id: 5,  dir: -1, stand_rotor: -3.708211, sim_sign: 1}
+    - {name: rl_thigh, port: /dev/ttyUSB2, id: 8,  dir: -1, stand_rotor:  0.355500, sim_sign: 1}
+    - {name: rr_thigh, port: /dev/ttyUSB3, id: 11, dir:  1, stand_rotor:  5.631416, sim_sign: 1}
+    - {name: fl_shank, port: /dev/ttyUSB0, id: 3,  dir: -1, stand_rotor:  1.573288, sim_sign: 1}
+    - {name: fr_shank, port: /dev/ttyUSB1, id: 6,  dir:  1, stand_rotor:  7.890237, sim_sign: 1}
+    - {name: rl_shank, port: /dev/ttyUSB2, id: 9,  dir:  1, stand_rotor:  5.886665, sim_sign: 1}
+    - {name: rr_shank, port: /dev/ttyUSB3, id: 12, dir: -1, stand_rotor: -1.180508, sim_sign: 1}

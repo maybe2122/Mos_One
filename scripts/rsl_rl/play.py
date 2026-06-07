@@ -7,11 +7,12 @@ from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Play a trained StackForce closed-chain USD policy.")
 parser.add_argument("--num_envs", type=int, default=1)
-parser.add_argument("--task", type=str, default=None)
+parser.add_argument("--task", type=str, default="StackForce-Mos20262ClosedUsd-ClosedUsd-v0")
 parser.add_argument("--agent", type=str, default="rsl_rl_cfg_entry_point")
 parser.add_argument("--checkpoint", type=str, default="model_.*.pt")
 parser.add_argument("--load_run", type=str, default=".*")
-parser.add_argument("--num_steps", type=int, default=500, help="Number of steps to run. Use 0 to run until the window is closed.")
+parser.add_argument("--num_steps", type=int, default=5000, help="Number of steps to run. Use 0 to run until the window is closed.")
+parser.add_argument("--torque_limit", type=float, default=30.0, help="Torque limit (N·m) used as the y-axis range / reference line in the torque plots.")
 parser.add_argument(
     "--disable_resets",
     action="store_true",
@@ -316,15 +317,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRun
             torque_history.append(tau.clone())
 
             # 写入 TensorBoard（每步一条，可实时刷新）
+            # 每个关节单图叠加 ±力矩上限参考线，使 y 轴范围始终覆盖 ±torque_limit。
             if tb_writer is not None:
+                lim = args_cli.torque_limit
                 for n, val in zip(joint_names, tau.tolist()):
-                    tb_writer.add_scalar(f"torque/{n}", val, steps)
+                    tb_writer.add_scalars(
+                        f"torque/{n}",
+                        {"tau": val, "+limit": lim, "-limit": -lim},
+                        steps,
+                    )
                 tb_writer.flush()
-
-            # 实时打印（每 25 步一次，避免刷屏）
-            if steps % 25 == 0 or steps == 1:
-                line = " | ".join(f"{n}:{t:+6.2f}" for n, t in zip(joint_names, tau.tolist()))
-                print(f"[torque step={steps}] {line}", flush=True)
 
             if args_cli.num_steps > 0 and steps >= args_cli.num_steps:
                 break
@@ -385,11 +387,24 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRun
             nrows = math.ceil(num_joints / ncols)
             t = torch.arange(data.shape[0]).numpy()
             fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 2.6 * nrows), squeeze=False)
+            lim = args_cli.torque_limit
             for i, n in enumerate(joint_names):
                 ax = axes[i // ncols][i % ncols]
-                ax.plot(t, data[:, i].numpy(), linewidth=0.8)
+                # 颜色分级（仿 robot_web drawTorque）：按本关节峰值 |τ| 相对上限的比例。
+                #   绿 = 裕度充足(<80%)，橙 = 接近上限(≥80%)，红 = 达到/超过上限(≥100%)。
+                peak = float(absmax[i])
+                if lim > 0 and peak >= lim:
+                    color, tag = "#d64545", " ≥上限"
+                elif lim > 0 and peak >= 0.8 * lim:
+                    color, tag = "#e08a1e", " 接近上限"
+                else:
+                    color, tag = "#2a8a3e", ""
+                ax.plot(t, data[:, i].numpy(), color=color, linewidth=0.8)
                 ax.axhline(0.0, color="gray", linewidth=0.5)
-                ax.set_title(n, fontsize=9)
+                ax.axhline(lim, color="red", linestyle="--", linewidth=0.6)
+                ax.axhline(-lim, color="red", linestyle="--", linewidth=0.6)
+                ax.set_ylim(-lim * 1.1, lim * 1.1)
+                ax.set_title(f"{n}  |max|={peak:.1f}{tag}", fontsize=9, color=color)
                 ax.set_xlabel("step")
                 ax.set_ylabel("N·m")
                 ax.grid(True, alpha=0.3)

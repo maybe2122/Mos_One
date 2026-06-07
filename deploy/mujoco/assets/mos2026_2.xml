@@ -1,170 +1,228 @@
 <?xml version="1.0" ?>
 <mujoco model="mos2026_2">
-  <compiler angle="radian" autolimits="true" balanceinertia="true"/>
-  <option timestep="0.005" gravity="0 0 -9.81" iterations="50" solver="Newton"/>
+  <compiler angle="radian" autolimits="true" balanceinertia="true" meshdir="meshes"/>
+  <option timestep="0.005" gravity="0 0 -9.81" iterations="50" solver="Newton" integrator="implicitfast"/>
   <default>
     <default class="body_visual">
-      <geom rgba="0.55 0.55 0.6 1" contype="1" conaffinity="1" friction="1 0.1 0.01"/>
+      <geom rgba="0.55 0.55 0.6 1" contype="2" conaffinity="1" friction="1.5 0.1 0.01"/>
     </default>
   </default>
   <asset>
     <texture name="grid" type="2d" builtin="checker" width="256" height="256" rgb1="0.2 0.3 0.4" rgb2="0.3 0.4 0.5"/>
     <material name="grid" texture="grid" texrepeat="10 10" reflectance="0.2"/>
+    <mesh name="FL_mesh" file="FL.obj"/>
+    <mesh name="FR_mesh" file="FR.obj"/>
+    <mesh name="RL_mesh" file="RL.obj"/>
+    <mesh name="RR_mesh" file="RR.obj"/>
+    <mesh name="base_mesh" file="base.obj"/>
+    <mesh name="fl_shank_mesh" file="fl_shank.obj"/>
+    <mesh name="fl_shank_link_a_mesh" file="fl_shank_link_a.obj"/>
+    <mesh name="fl_shank_link_b_mesh" file="fl_shank_link_b.obj"/>
+    <mesh name="fl_shank_motor_gear_mesh" file="fl_shank_motor_gear.obj"/>
+    <mesh name="fl_thigh_mesh" file="fl_thigh.obj"/>
+    <mesh name="fl_thigh_motor_gear_mesh" file="fl_thigh_motor_gear.obj"/>
+    <mesh name="fr_shank_mesh" file="fr_shank.obj"/>
+    <mesh name="fr_shank_link_a_mesh" file="fr_shank_link_a.obj"/>
+    <mesh name="fr_shank_link_b_mesh" file="fr_shank_link_b.obj"/>
+    <mesh name="fr_shank_motor_gear_mesh" file="fr_shank_motor_gear.obj"/>
+    <mesh name="fr_thigh_mesh" file="fr_thigh.obj"/>
+    <mesh name="fr_thigh_motor_gear_mesh" file="fr_thigh_motor_gear.obj"/>
+    <mesh name="rl_shank_mesh" file="rl_shank.obj"/>
+    <mesh name="rl_shank_link_a_mesh" file="rl_shank_link_a.obj"/>
+    <mesh name="rl_shank_link_b_mesh" file="rl_shank_link_b.obj"/>
+    <mesh name="rl_shank_motor_gear_mesh" file="rl_shank_motor_gear.obj"/>
+    <mesh name="rl_thigh_mesh" file="rl_thigh.obj"/>
+    <mesh name="rl_thigh_motor_gear_mesh" file="rl_thigh_motor_gear.obj"/>
+    <mesh name="rr_shank_mesh" file="rr_shank.obj"/>
+    <mesh name="rr_shank_link_a_mesh" file="rr_shank_link_a.obj"/>
+    <mesh name="rr_shank_link_b_mesh" file="rr_shank_link_b.obj"/>
+    <mesh name="rr_shank_motor_gear_mesh" file="rr_shank_motor_gear.obj"/>
+    <mesh name="rr_thigh_mesh" file="rr_thigh.obj"/>
+    <mesh name="rr_thigh_motor_gear_mesh" file="rr_thigh_motor_gear.obj"/>
   </asset>
   <worldbody>
     <light name="spot" pos="0 0 3" dir="0 0 -1" directional="true"/>
-    <geom name="floor" type="plane" size="20 20 0.1" material="grid" friction="1 0.1 0.01"/>
+    <geom name="floor" type="plane" size="20 20 0.1" material="grid" friction="1.5 0.1 0.01" contype="1" conaffinity="1"/>
     <body name="base" pos="0.000000 0.000000 0.350000" quat="1 0 0 0">
       <freejoint name="root"/>
       <inertial mass="4.520163" pos="-0.000760 0.000206 -0.000012" diaginertia="0.011891 0.011720 0.019358" quat="1.000000 -0.000000 0.000299 -0.000127"/>
-      <geom name="base_geom" type="box" pos="0.000000 0.000000 0.000000" size="0.392300 0.150000 0.055000" class="body_visual"/>
+      <geom name="base_geom" type="mesh" mesh="base_mesh" class="body_visual" rgba="1 1 1 0"/>
+      <geom name="base_visual" type="mesh" mesh="base_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
       <body name="FL" pos="0.378300 0.098000 0.000000" quat="1.000000 0.000000 0.000000 0.000000">
         <joint name="fl_hip" type="hinge" pos="0.000000 0.000000 0.000000" axis="-1.000000 0.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
         <inertial mass="0.985181" pos="-0.114293 -0.009015 -0.000144" diaginertia="0.000918 0.002659 0.002082" quat="1.000000 -0.000337 -0.000061 0.000002"/>
-        <geom name="FL_geom" type="box" pos="-0.116000 0.000000 0.000000" size="0.116000 0.051150 0.050000" class="body_visual"/>
+        <geom name="FL_geom" type="mesh" mesh="FL_mesh" class="body_visual" rgba="1 1 1 0"/>
+        <geom name="FL_visual" type="mesh" mesh="FL_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
         <body name="fl_shank_link_a" pos="-0.116000 0.087150 -0.010100" quat="1.000000 0.000000 0.000000 0.000000">
           <joint name="fl_shank_link" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 -1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
           <inertial mass="0.171588" pos="-0.029157 -0.015180 0.032474" diaginertia="0.000444 0.000444 0.000049" quat="0.933408 -0.006455 -0.358660 -0.008386"/>
-          <geom name="fl_shank_link_a_geom" type="box" pos="-0.046333 -0.043002 0.052098" size="0.073310 0.047998 0.079094" class="body_visual"/>
+          <geom name="fl_shank_link_a_geom" type="mesh" mesh="fl_shank_link_a_mesh" class="body_visual" rgba="1 1 1 0"/>
+          <geom name="fl_shank_link_a_visual" type="mesh" mesh="fl_shank_link_a_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
           <body name="fl_shank_link_b" pos="-0.104652 -0.006004 0.116201" quat="1.000000 0.000000 0.000000 0.000000">
             <joint name="fl_shank_link_b" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
             <inertial mass="0.046939" pos="-0.053747 -0.012823 -0.048469" diaginertia="0.000133 0.000136 0.000004" quat="0.933455 0.001996 0.358505 0.011457"/>
-            <geom name="fl_shank_link_b_geom" type="box" pos="-0.052832 -0.009500 -0.058246" size="0.067808 0.009500 0.073211" class="body_visual"/>
+            <geom name="fl_shank_link_b_geom" type="mesh" mesh="fl_shank_link_b_mesh" class="body_visual" rgba="1 1 1 0"/>
+            <geom name="fl_shank_link_b_visual" type="mesh" mesh="fl_shank_link_b_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
           </body>
         </body>
         <body name="fl_shank_motor_gear" pos="-0.066000 0.046150 0.000000" quat="1.000000 0.000000 0.000000 0.000000">
           <joint name="fl_shank_motor_gear" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 -1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
           <inertial mass="0.038524" pos="0.000000 -0.039054 0.000000" diaginertia="0.000009 0.000010 0.000009" quat="1.000000 0.000000 0.000000 0.000000"/>
-          <geom name="fl_shank_motor_gear_geom" type="box" pos="0.000000 -0.026000 0.000000" size="0.027000 0.026000 0.026955" class="body_visual"/>
+          <geom name="fl_shank_motor_gear_geom" type="mesh" mesh="fl_shank_motor_gear_mesh" class="body_visual" rgba="1 1 1 0"/>
+          <geom name="fl_shank_motor_gear_visual" type="mesh" mesh="fl_shank_motor_gear_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
         </body>
         <body name="fl_thigh" pos="-0.116000 0.068150 -0.010100" quat="1.000000 0.000000 0.000000 0.000000">
           <joint name="fl_thigh" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 -1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
           <inertial mass="0.218416" pos="-0.038288 -0.006463 -0.028166" diaginertia="0.000087 0.000729 0.000667" quat="0.950074 0.003534 -0.311819 -0.010768"/>
-          <geom name="fl_thigh_geom" type="box" pos="-0.062505 -0.023000 -0.043341" size="0.102487 0.031000 0.083323" class="body_visual"/>
+          <geom name="fl_thigh_geom" type="mesh" mesh="fl_thigh_mesh" class="body_visual" rgba="1 1 1 0"/>
+          <geom name="fl_thigh_visual" type="mesh" mesh="fl_thigh_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
           <body name="fl_shank" pos="-0.144992 0.008000 -0.106664" quat="1.000000 0.000000 0.000000 0.000000">
             <joint name="fl_shank" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 -1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
             <inertial mass="0.286222" pos="0.053689 -0.004525 -0.041214" diaginertia="0.000064 0.001309 0.001261" quat="0.924069 -0.000323 0.382225 0.000664"/>
-            <geom name="fl_shank_geom" type="box" pos="0.048112 -0.005504 -0.020428" size="0.126397 0.015000 0.135730" class="body_visual"/>
+            <geom name="fl_shank_geom" type="mesh" mesh="fl_shank_mesh" class="body_visual" rgba="1 1 1 0"/>
+            <geom name="fl_shank_visual" type="mesh" mesh="fl_shank_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
           </body>
         </body>
         <body name="fl_thigh_motor_gear" pos="-0.166000 0.046150 0.000000" quat="1.000000 0.000000 0.000000 0.000000">
           <joint name="fl_thigh_motor_gear" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 -1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
           <inertial mass="0.048236" pos="0.000000 -0.030398 0.000000" diaginertia="0.000011 0.000013 0.000011" quat="1.000000 0.000000 0.000000 0.000000"/>
-          <geom name="fl_thigh_motor_gear_geom" type="box" pos="0.000000 -0.026000 0.000000" size="0.026996 0.026000 0.026923" class="body_visual"/>
+          <geom name="fl_thigh_motor_gear_geom" type="mesh" mesh="fl_thigh_motor_gear_mesh" class="body_visual" rgba="1 1 1 0"/>
+          <geom name="fl_thigh_motor_gear_visual" type="mesh" mesh="fl_thigh_motor_gear_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
         </body>
       </body>
       <body name="FR" pos="0.378300 -0.098000 0.000000" quat="1.000000 0.000000 0.000000 0.000000">
         <joint name="fr_hip" type="hinge" pos="0.000000 0.000000 0.000000" axis="-1.000000 0.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
-        <inertial mass="0.791489" pos="-0.126572 0.005029 -0.000156" diaginertia="0.000807 0.002446 0.001967" quat="1.000000 0.000437 -0.000095 0.000042"/>
-        <geom name="FR_geom" type="box" pos="-0.116000 -0.000000 -0.000000" size="0.116000 0.051150 0.050000" class="body_visual"/>
+        <inertial mass="0.985181" pos="-0.126572 0.005029 -0.000156" diaginertia="0.000807 0.002446 0.001967" quat="1.000000 0.000437 -0.000095 0.000042"/>
+        <geom name="FR_geom" type="mesh" mesh="FR_mesh" class="body_visual" rgba="1 1 1 0"/>
+        <geom name="FR_visual" type="mesh" mesh="FR_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
         <body name="fr_shank_link_a" pos="-0.116000 -0.087150 -0.010100" quat="1.000000 0.000000 0.000000 0.000000">
           <joint name="fr_shank_link_a" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
           <inertial mass="0.171588" pos="-0.029256 0.015180 0.032385" diaginertia="0.000444 0.000444 0.000049" quat="0.933606 0.010405 -0.358145 -0.001902"/>
-          <geom name="fr_shank_link_a_geom" type="box" pos="-0.046332 0.043002 0.052098" size="0.073311 0.047998 0.079093" class="body_visual"/>
+          <geom name="fr_shank_link_a_geom" type="mesh" mesh="fr_shank_link_a_mesh" class="body_visual" rgba="1 1 1 0"/>
+          <geom name="fr_shank_link_a_visual" type="mesh" mesh="fr_shank_link_a_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
           <body name="fr_shank_link_b" pos="-0.104652 0.006004 0.116201" quat="1.000000 0.000000 0.000000 0.000000">
             <joint name="fr_shank_link_b" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 -1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
             <inertial mass="0.046943" pos="-0.053743 0.012826 -0.048466" diaginertia="0.000133 0.000136 0.000004" quat="0.933445 -0.001985 0.358534 -0.011426"/>
-            <geom name="fr_shank_link_b_geom" type="box" pos="-0.052832 0.009500 -0.058246" size="0.067808 0.009500 0.073211" class="body_visual"/>
+            <geom name="fr_shank_link_b_geom" type="mesh" mesh="fr_shank_link_b_mesh" class="body_visual" rgba="1 1 1 0"/>
+            <geom name="fr_shank_link_b_visual" type="mesh" mesh="fr_shank_link_b_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
           </body>
         </body>
         <body name="fr_shank_motor_gear" pos="-0.066000 -0.046150 0.000000" quat="1.000000 0.000000 0.000000 0.000000">
           <joint name="fr_shank_motor" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
           <inertial mass="0.038524" pos="0.000000 0.039054 -0.000000" diaginertia="0.000009 0.000010 0.000009" quat="1.000000 0.000000 0.000000 0.000000"/>
-          <geom name="fr_shank_motor_gear_geom" type="box" pos="0.000000 0.026000 -0.000000" size="0.027000 0.026000 0.026949" class="body_visual"/>
+          <geom name="fr_shank_motor_gear_geom" type="mesh" mesh="fr_shank_motor_gear_mesh" class="body_visual" rgba="1 1 1 0"/>
+          <geom name="fr_shank_motor_gear_visual" type="mesh" mesh="fr_shank_motor_gear_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
         </body>
         <body name="fr_thigh" pos="-0.116000 -0.068150 -0.010100" quat="1.000000 0.000000 0.000000 0.000000">
           <joint name="fr_thigh" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
           <inertial mass="0.218416" pos="-0.038288 0.006463 -0.028167" diaginertia="0.000087 0.000729 0.000667" quat="0.950074 -0.003534 -0.311819 0.010768"/>
-          <geom name="fr_thigh_geom" type="box" pos="-0.062505 0.023000 -0.043341" size="0.102487 0.031000 0.083323" class="body_visual"/>
+          <geom name="fr_thigh_geom" type="mesh" mesh="fr_thigh_mesh" class="body_visual" rgba="1 1 1 0"/>
+          <geom name="fr_thigh_visual" type="mesh" mesh="fr_thigh_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
           <body name="fr_shank" pos="-0.144992 -0.008000 -0.106664" quat="1.000000 0.000000 0.000000 0.000000">
             <joint name="fr_shank" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
             <inertial mass="0.286223" pos="0.053689 0.002521 -0.041214" diaginertia="0.000064 0.001309 0.001261" quat="0.924069 0.000323 0.382225 -0.000664"/>
-            <geom name="fr_shank_geom" type="box" pos="0.048112 0.003500 -0.020428" size="0.126397 0.015000 0.135730" class="body_visual"/>
+            <geom name="fr_shank_geom" type="mesh" mesh="fr_shank_mesh" class="body_visual" rgba="1 1 1 0"/>
+            <geom name="fr_shank_visual" type="mesh" mesh="fr_shank_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
           </body>
         </body>
         <body name="fr_thigh_motor_gear" pos="-0.166000 -0.046150 0.000000" quat="1.000000 0.000000 0.000000 0.000000">
           <joint name="fr_thigh_motor" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
           <inertial mass="0.048236" pos="-0.000000 0.030398 -0.000000" diaginertia="0.000011 0.000013 0.000011" quat="1.000000 0.000000 0.000000 0.000000"/>
-          <geom name="fr_thigh_motor_gear_geom" type="box" pos="0.000000 0.026000 0.000000" size="0.026981 0.026000 0.026994" class="body_visual"/>
+          <geom name="fr_thigh_motor_gear_geom" type="mesh" mesh="fr_thigh_motor_gear_mesh" class="body_visual" rgba="1 1 1 0"/>
+          <geom name="fr_thigh_motor_gear_visual" type="mesh" mesh="fr_thigh_motor_gear_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
         </body>
       </body>
       <body name="RL" pos="-0.389329 0.098000 0.000000" quat="1.000000 0.000000 0.000000 0.000000">
         <joint name="rl_hip" type="hinge" pos="0.000000 0.000000 0.000000" axis="1.000000 0.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
         <inertial mass="0.985181" pos="0.125406 -0.009015 -0.000144" diaginertia="0.000918 0.002659 0.002082" quat="1.000000 -0.000337 -0.000061 -0.000017"/>
-        <geom name="RL_geom" type="box" pos="0.127029 0.000000 0.000000" size="0.116000 0.051150 0.050000" class="body_visual"/>
+        <geom name="RL_geom" type="mesh" mesh="RL_mesh" class="body_visual" rgba="1 1 1 0"/>
+        <geom name="RL_visual" type="mesh" mesh="RL_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
         <body name="rl_shank_link_a" pos="0.127029 0.087150 -0.010100" quat="1.000000 0.000000 0.000000 0.000000">
           <joint name="rl_shank_link_a" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 -1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
           <inertial mass="0.171588" pos="-0.029157 -0.015180 0.032474" diaginertia="0.000444 0.000444 0.000049" quat="0.933408 -0.006455 -0.358660 -0.008386"/>
-          <geom name="rl_shank_link_a_geom" type="box" pos="-0.046322 -0.043002 0.052124" size="0.073321 0.047998 0.079068" class="body_visual"/>
+          <geom name="rl_shank_link_a_geom" type="mesh" mesh="rl_shank_link_a_mesh" class="body_visual" rgba="1 1 1 0"/>
+          <geom name="rl_shank_link_a_visual" type="mesh" mesh="rl_shank_link_a_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
           <body name="rl_shank_link_b" pos="-0.104652 -0.006004 0.116201" quat="1.000000 0.000000 0.000000 0.000000">
             <joint name="rl_shank_link_b" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
             <inertial mass="0.046939" pos="-0.053747 -0.012823 -0.048469" diaginertia="0.000133 0.000136 0.000004" quat="0.933455 0.001996 0.358505 0.011457"/>
-            <geom name="rl_shank_link_b_geom" type="box" pos="-0.052832 -0.009500 -0.058246" size="0.067808 0.009500 0.073211" class="body_visual"/>
+            <geom name="rl_shank_link_b_geom" type="mesh" mesh="rl_shank_link_b_mesh" class="body_visual" rgba="1 1 1 0"/>
+            <geom name="rl_shank_link_b_visual" type="mesh" mesh="rl_shank_link_b_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
           </body>
         </body>
         <body name="rl_shank_motor_gear" pos="0.177029 0.046150 0.000000" quat="1.000000 0.000000 0.000000 0.000000">
           <joint name="rl_shank_motor" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
           <inertial mass="0.038524" pos="0.000000 -0.039054 0.000000" diaginertia="0.000009 0.000010 0.000009" quat="1.000000 0.000000 0.000000 0.000000"/>
-          <geom name="rl_shank_motor_gear_geom" type="box" pos="0.000000 -0.026000 0.000000" size="0.026976 0.026000 0.026996" class="body_visual"/>
+          <geom name="rl_shank_motor_gear_geom" type="mesh" mesh="rl_shank_motor_gear_mesh" class="body_visual" rgba="1 1 1 0"/>
+          <geom name="rl_shank_motor_gear_visual" type="mesh" mesh="rl_shank_motor_gear_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
         </body>
         <body name="rl_thigh" pos="0.127029 0.087150 -0.010100" quat="1.000000 0.000000 0.000000 0.000000">
           <joint name="rl_thigh" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 -1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
           <inertial mass="0.218416" pos="-0.038288 -0.025463 -0.028166" diaginertia="0.000087 0.000729 0.000667" quat="0.950074 0.003534 -0.311819 -0.010768"/>
-          <geom name="rl_thigh_geom" type="box" pos="-0.062505 -0.042000 -0.043341" size="0.102487 0.031000 0.083323" class="body_visual"/>
+          <geom name="rl_thigh_geom" type="mesh" mesh="rl_thigh_mesh" class="body_visual" rgba="1 1 1 0"/>
+          <geom name="rl_thigh_visual" type="mesh" mesh="rl_thigh_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
           <body name="rl_shank" pos="-0.144992 -0.011000 -0.106664" quat="1.000000 0.000000 0.000000 0.000000">
             <joint name="rl_shank" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 -1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
             <inertial mass="0.286222" pos="0.053689 -0.004525 -0.041214" diaginertia="0.000064 0.001309 0.001261" quat="0.924069 -0.000323 0.382225 0.000664"/>
-            <geom name="rl_shank_geom" type="box" pos="0.048112 -0.005504 -0.020428" size="0.126397 0.015000 0.135730" class="body_visual"/>
+            <geom name="rl_shank_geom" type="mesh" mesh="rl_shank_mesh" class="body_visual" rgba="1 1 1 0"/>
+            <geom name="rl_shank_visual" type="mesh" mesh="rl_shank_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
           </body>
         </body>
         <body name="rl_thigh_motor_gear" pos="0.077029 0.046150 0.000000" quat="1.000000 0.000000 0.000000 0.000000">
           <joint name="rl_thigh_motor" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
           <inertial mass="0.048236" pos="-0.000000 -0.030398 0.000000" diaginertia="0.000011 0.000013 0.000011" quat="1.000000 0.000000 0.000000 0.000000"/>
-          <geom name="rl_thigh_motor_gear_geom" type="box" pos="0.000000 -0.026000 0.000000" size="0.026996 0.026000 0.026923" class="body_visual"/>
+          <geom name="rl_thigh_motor_gear_geom" type="mesh" mesh="rl_thigh_motor_gear_mesh" class="body_visual" rgba="1 1 1 0"/>
+          <geom name="rl_thigh_motor_gear_visual" type="mesh" mesh="rl_thigh_motor_gear_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
         </body>
       </body>
       <body name="RR" pos="-0.372300 -0.098000 0.000000" quat="1.000000 0.000000 0.000000 0.000000">
         <joint name="rr_hip" type="hinge" pos="0.000000 0.000000 0.000000" axis="1.000000 0.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
         <inertial mass="0.985181" pos="0.108293 0.009015 -0.000144" diaginertia="0.000918 0.002659 0.002082" quat="1.000000 0.000337 0.000061 0.000002"/>
-        <geom name="RR_geom" type="box" pos="0.110000 -0.000000 -0.000000" size="0.116000 0.051150 0.050000" class="body_visual"/>
+        <geom name="RR_geom" type="mesh" mesh="RR_mesh" class="body_visual" rgba="1 1 1 0"/>
+        <geom name="RR_visual" type="mesh" mesh="RR_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
         <body name="rr_shank_link_a" pos="0.110000 -0.087150 -0.010100" quat="1.000000 0.000000 0.000000 0.000000">
           <joint name="rr_shank_link_a" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
           <inertial mass="0.171588" pos="-0.029256 0.015180 0.032385" diaginertia="0.000444 0.000444 0.000049" quat="0.933606 0.010405 -0.358145 -0.001902"/>
-          <geom name="rr_shank_link_a_geom" type="box" pos="-0.046323 0.043002 0.052134" size="0.073320 0.047998 0.079057" class="body_visual"/>
+          <geom name="rr_shank_link_a_geom" type="mesh" mesh="rr_shank_link_a_mesh" class="body_visual" rgba="1 1 1 0"/>
+          <geom name="rr_shank_link_a_visual" type="mesh" mesh="rr_shank_link_a_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
           <body name="rr_shank_link_b" pos="-0.104652 0.006004 0.116201" quat="1.000000 0.000000 0.000000 0.000000">
             <joint name="rr_shank_link_b" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 -1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
             <inertial mass="0.046943" pos="-0.053743 0.012826 -0.048466" diaginertia="0.000133 0.000136 0.000004" quat="0.933445 -0.001985 0.358534 -0.011426"/>
-            <geom name="rr_shank_link_b_geom" type="box" pos="-0.052832 0.009500 -0.058246" size="0.067808 0.009500 0.073211" class="body_visual"/>
+            <geom name="rr_shank_link_b_geom" type="mesh" mesh="rr_shank_link_b_mesh" class="body_visual" rgba="1 1 1 0"/>
+            <geom name="rr_shank_link_b_visual" type="mesh" mesh="rr_shank_link_b_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
           </body>
         </body>
         <body name="rr_shank_motor_gear" pos="0.160000 -0.046150 0.000000" quat="1.000000 0.000000 0.000000 0.000000">
           <joint name="rr_shank_motor" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 -1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
           <inertial mass="0.038524" pos="0.000000 0.039054 -0.000000" diaginertia="0.000009 0.000010 0.000009" quat="1.000000 0.000000 0.000000 0.000000"/>
-          <geom name="rr_shank_motor_gear_geom" type="box" pos="0.000000 0.026000 -0.000000" size="0.026996 0.026000 0.026923" class="body_visual"/>
+          <geom name="rr_shank_motor_gear_geom" type="mesh" mesh="rr_shank_motor_gear_mesh" class="body_visual" rgba="1 1 1 0"/>
+          <geom name="rr_shank_motor_gear_visual" type="mesh" mesh="rr_shank_motor_gear_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
         </body>
         <body name="rr_thigh" pos="0.110000 -0.068150 -0.010100" quat="1.000000 0.000000 0.000000 0.000000">
           <joint name="rr_thigh" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
           <inertial mass="0.218416" pos="-0.038288 0.006463 -0.028167" diaginertia="0.000087 0.000729 0.000667" quat="0.950074 -0.003534 -0.311819 0.010768"/>
-          <geom name="rr_thigh_geom" type="box" pos="-0.062505 0.023000 -0.043341" size="0.102487 0.031000 0.083323" class="body_visual"/>
+          <geom name="rr_thigh_geom" type="mesh" mesh="rr_thigh_mesh" class="body_visual" rgba="1 1 1 0"/>
+          <geom name="rr_thigh_visual" type="mesh" mesh="rr_thigh_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
           <body name="rr_shank" pos="-0.144992 -0.008000 -0.106664" quat="1.000000 0.000000 0.000000 0.000000">
             <joint name="rr_shank" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
             <inertial mass="0.286223" pos="0.053689 0.002521 -0.041214" diaginertia="0.000064 0.001309 0.001261" quat="0.924069 0.000323 0.382225 -0.000664"/>
-            <geom name="rr_shank_geom" type="box" pos="0.048112 0.003500 -0.020428" size="0.126397 0.015000 0.135730" class="body_visual"/>
+            <geom name="rr_shank_geom" type="mesh" mesh="rr_shank_mesh" class="body_visual" rgba="1 1 1 0"/>
+            <geom name="rr_shank_visual" type="mesh" mesh="rr_shank_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
           </body>
         </body>
         <body name="rr_thigh_motor_gear" pos="0.060000 -0.046150 0.000000" quat="1.000000 0.000000 0.000000 0.000000">
           <joint name="rr_thigh_motor" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
           <inertial mass="0.048236" pos="0.000000 0.030398 -0.000000" diaginertia="0.000011 0.000013 0.000011" quat="1.000000 0.000000 0.000000 0.000000"/>
-          <geom name="rr_thigh_motor_gear_geom" type="box" pos="0.000000 0.026000 -0.000000" size="0.026996 0.026000 0.026923" class="body_visual"/>
+          <geom name="rr_thigh_motor_gear_geom" type="mesh" mesh="rr_thigh_motor_gear_mesh" class="body_visual" rgba="1 1 1 0"/>
+          <geom name="rr_thigh_motor_gear_visual" type="mesh" mesh="rr_thigh_motor_gear_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
         </body>
       </body>
     </body>
   </worldbody>
   <equality>
-    <connect name="fl_close_loop" body1="fl_shank_link_b" body2="fl_shank" anchor="-0.107640 -0.005000 -0.118510" solref="0.005 1"/>
-    <connect name="rl_close_loop" body1="rl_shank_link_b" body2="rl_shank" anchor="-0.107640 -0.004996 -0.118510" solref="0.005 1"/>
-    <connect name="rr_close_loop" body1="rr_shank_link_b" body2="rr_shank" anchor="-0.107640 0.004996 -0.118510" solref="0.005 1"/>
-    <connect name="fr_close_loop" body1="fr_shank_link_b" body2="fr_shank" anchor="-0.107640 0.004996 -0.118510" solref="0.005 1"/>
+    <connect name="fl_close_loop" body1="fl_shank_link_b" body2="fl_shank" anchor="-0.107640 -0.005000 -0.118510" solref="0.002 1"/>
+    <connect name="rl_close_loop" body1="rl_shank_link_b" body2="rl_shank" anchor="-0.107640 -0.004996 -0.118510" solref="0.002 1"/>
+    <connect name="rr_close_loop" body1="rr_shank_link_b" body2="rr_shank" anchor="-0.107640 0.004996 -0.118510" solref="0.002 1"/>
+    <connect name="fr_close_loop" body1="fr_shank_link_b" body2="fr_shank" anchor="-0.107640 0.004996 -0.118510" solref="0.002 1"/>
   </equality>
   <actuator>
     <position name="act_fl_hip" joint="fl_hip" kp="25.0" kv="0.5" forcerange="-80.0 80.0" ctrlrange="-3.14159 3.14159"/>

@@ -13,10 +13,13 @@ Strategy:
     inverse(parent_world) * child_world. Joint pos is in the child's local
     frame (USD already authors localPos1=(0,0,0) for every articulation
     joint, so this is just zero); joint axis is `localRot1 * unit_axis_USD`.
-  - Visual + collision geom per body is a single box derived from the AABB
-    of the body's visual mesh, expressed in body-local coords. This trades
-    visual fidelity for converter simplicity and fast load — the policy can
-    then drive joints and the user sees the robot "move."
+  - Collision geom per body is a single box derived from the AABB of the
+    body's visual mesh (kept for fast, stable contacts). For visual fidelity
+    the body's high-poly STL visual mesh is also exported (grid-decimated to
+    ~1/7 the triangles) to deploy/mujoco/assets/meshes/<body>.obj and emitted
+    as a non-colliding mesh geom; the collision box is then made transparent.
+    Physics is therefore identical to the box-only converter — only the
+    appearance changes, so existing trained policies stay valid.
   - 4 closure joints become <equality connect> constraints, anchored in
     body0's frame (USD's body0 == MJCF's body1 for the connect element).
   - 12 <position> actuators on the actuated joints with kp=stiffness=25,
@@ -46,6 +49,12 @@ BASE_USD = USD_DIR / "configuration/mos2026_2_base.usd"
 
 OUT_DIR = REPO_ROOT / "deploy/mujoco/assets"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
+MESH_DIR = OUT_DIR / "meshes"
+
+# Grid vertex-clustering cell size (metres) for decimating the high-poly STL
+# visual meshes. 4 mm keeps the robot recognisable while cutting triangle count
+# ~10x so the viewer loads fast. Purely visual — collision/physics are unchanged.
+MESH_CELL_SIZE = 0.004
 
 # Joint -> actuator metadata. Matches Isaac Lab's ImplicitActuatorCfg in
 # mos2026_2_closed_usd_env_cfg.py. Note the FL/FR naming asymmetry already
@@ -191,6 +200,137 @@ def aabb_for_body(base_stage: Usd.Stage, body_name: str) -> tuple[np.ndarray, np
     return np.min(mins, axis=0), np.max(maxs, axis=0)
 
 
+def load_visual_mesh(base_stage: Usd.Stage, body_name: str) -> tuple[np.ndarray, np.ndarray] | None:
+    """Combine all Mesh prims under /visuals/{body_name} into (points, tris).
+
+    Points are taken raw (no transform) — they are already authored in the
+    body-local frame, the same convention `aabb_for_body` relies on, so the
+    emitted mesh geom needs no pos/quat offset and lines up with the box.
+    """
+    root = base_stage.GetPrimAtPath(f"/visuals/{body_name}")
+    if not root.IsValid():
+        return None
+    pts_list: list[np.ndarray] = []
+    tri_list: list[np.ndarray] = []
+    offset = 0
+    for desc in Usd.PrimRange(root):
+        if desc.GetTypeName() != "Mesh":
+            continue
+        mesh = UsdGeom.Mesh(desc)
+        pts = mesh.GetPointsAttr().Get()
+        counts = mesh.GetFaceVertexCountsAttr().Get()
+        indices = mesh.GetFaceVertexIndicesAttr().Get()
+        if not pts or not counts or not indices:
+            continue
+        pts = np.asarray(pts, dtype=np.float64)
+        counts = np.asarray(counts)
+        indices = np.asarray(indices)
+        tris = []
+        i = 0
+        for c in counts:
+            for k in range(1, c - 1):  # fan-triangulate arbitrary polygons
+                tris.append((indices[i], indices[i + k], indices[i + k + 1]))
+            i += c
+        if not tris:
+            continue
+        tri_list.append(np.asarray(tris, dtype=np.int64) + offset)
+        pts_list.append(pts)
+        offset += len(pts)
+    if not pts_list:
+        return None
+    return np.vstack(pts_list), np.vstack(tri_list)
+
+
+def decimate_mesh(points: np.ndarray, tris: np.ndarray, cell: float) -> tuple[np.ndarray, np.ndarray]:
+    """Grid vertex clustering: snap verts to a `cell`-sized grid, merge, drop
+    degenerate triangles. Dependency-free and robust on dirty STL output."""
+    keys = np.floor(points / cell).astype(np.int64)
+    _, inverse = np.unique(keys, axis=0, return_inverse=True)
+    inverse = inverse.ravel()
+    n_new = int(inverse.max()) + 1
+    new_pts = np.zeros((n_new, 3))
+    counts = np.zeros(n_new)
+    np.add.at(new_pts, inverse, points)
+    np.add.at(counts, inverse, 1)
+    new_pts /= counts[:, None]
+    new_tris = inverse[tris]
+    keep = (
+        (new_tris[:, 0] != new_tris[:, 1])
+        & (new_tris[:, 1] != new_tris[:, 2])
+        & (new_tris[:, 0] != new_tris[:, 2])
+    )
+    return new_pts, new_tris[keep]
+
+
+def write_obj(path: Path, points: np.ndarray, tris: np.ndarray) -> None:
+    lines = [f"v {x:.6f} {y:.6f} {z:.6f}" for x, y, z in points]
+    lines += [f"f {a + 1} {b + 1} {c + 1}" for a, b, c in tris]
+    path.write_text("\n".join(lines) + "\n")
+
+
+def export_visual_meshes(base_stage: Usd.Stage, body_names: list[str]) -> set[str]:
+    """Decimate + write one OBJ per body that has a visual mesh.
+
+    Returns the set of body names for which an OBJ was written (those get a
+    mesh geom in the MJCF; others fall back to the AABB box only)."""
+    MESH_DIR.mkdir(parents=True, exist_ok=True)
+    written: set[str] = set()
+    total_in = total_out = 0
+    for name in body_names:
+        loaded = load_visual_mesh(base_stage, name)
+        if loaded is None:
+            continue
+        pts, tris = loaded
+        dpts, dtris = decimate_mesh(pts, tris, MESH_CELL_SIZE)
+        if len(dtris) == 0:
+            continue
+        write_obj(MESH_DIR / f"{name}.obj", dpts, dtris)
+        written.add(name)
+        total_in += len(tris)
+        total_out += len(dtris)
+    print(f"[info] exported {len(written)} meshes, {total_in} -> {total_out} tris "
+          f"(cell {MESH_CELL_SIZE} m)")
+    return written
+
+
+def add_geoms(elem: ET.Element, body_name: str, aabb, has_mesh: bool) -> None:
+    """Emit a collision box (kept identical to the original converter so physics
+    is unchanged) plus, when available, a visual mesh geom. When a mesh is
+    present the collision box is made transparent so only the mesh is seen."""
+    if aabb is not None:
+        bmin, bmax = aabb
+        center = (bmin + bmax) / 2
+        half = np.maximum((bmax - bmin) / 2, 1e-3)
+        box_attrs = {
+            "name": f"{body_name}_geom",
+            "type": "box",
+            "pos": fmt(center),
+            "size": fmt(half),
+            "class": "body_visual",
+        }
+        if has_mesh:
+            box_attrs["rgba"] = "1 1 1 0"  # invisible; still collides
+        ET.SubElement(elem, "geom", box_attrs)
+    else:
+        ET.SubElement(elem, "geom", {
+            "name": f"{body_name}_geom",
+            "type": "sphere",
+            "size": "0.01",
+            "class": "body_visual",
+            **({"rgba": "1 1 1 0"} if has_mesh else {}),
+        })
+    if has_mesh:
+        ET.SubElement(elem, "geom", {
+            "name": f"{body_name}_visual",
+            "type": "mesh",
+            "mesh": f"{body_name}_mesh",
+            "contype": "0",
+            "conaffinity": "0",
+            "group": "1",
+            "rgba": "0.75 0.75 0.78 1",
+        })
+
+
 def build_tree(bodies: dict, articulation: list) -> tuple[str, dict]:
     parent_of = {}
     children_of = {}
@@ -320,7 +460,8 @@ def emit_body(parent_elem: ET.Element, body_path: str, parent_world_xf: Gf.Matri
 
 
 def _emit_subtree(parent_elem: ET.Element, body_path: str, body_world_xf: Gf.Matrix4d,
-                  bodies: dict, children_of: dict, base_stage: Usd.Stage) -> None:
+                  bodies: dict, children_of: dict, base_stage: Usd.Stage,
+                  mesh_bodies: set[str]) -> None:
     for child_path, joint in children_of.get(body_path, []):
         sub_body = bodies[child_path]
         sub_name = sub_body["name"]
@@ -351,27 +492,11 @@ def _emit_subtree(parent_elem: ET.Element, body_path: str, body_world_xf: Gf.Mat
             "quat": fmt(sub_body["principal_axes"]),
         })
 
-        sub_aabb = aabb_for_body(base_stage, sub_name)
-        if sub_aabb is not None:
-            bmin, bmax = sub_aabb
-            center = (bmin + bmax) / 2
-            half = np.maximum((bmax - bmin) / 2, 1e-3)
-            ET.SubElement(child_elem, "geom", {
-                "name": f"{sub_name}_geom",
-                "type": "box",
-                "pos": fmt(center),
-                "size": fmt(half),
-                "class": "body_visual",
-            })
-        else:
-            ET.SubElement(child_elem, "geom", {
-                "name": f"{sub_name}_geom",
-                "type": "sphere",
-                "size": "0.01",
-                "class": "body_visual",
-            })
+        add_geoms(child_elem, sub_name, aabb_for_body(base_stage, sub_name),
+                  sub_name in mesh_bodies)
 
-        _emit_subtree(child_elem, child_path, sub_body["world_xf"], bodies, children_of, base_stage)
+        _emit_subtree(child_elem, child_path, sub_body["world_xf"], bodies,
+                      children_of, base_stage, mesh_bodies)
 
 
 def prettify(elem: ET.Element) -> str:
@@ -390,8 +515,12 @@ def main() -> int:
     print(f"[info] {len(bodies)} bodies, {len(articulation)} articulation joints, {len(closures)} closure joints")
     print(f"[info] root body: {root_path}")
 
+    body_names = [bodies[p]["name"] for p in bodies]
+    mesh_bodies = export_visual_meshes(base_stage, body_names)
+
     mujoco = ET.Element("mujoco", {"model": "mos2026_2"})
-    ET.SubElement(mujoco, "compiler", {"angle": "radian", "autolimits": "true", "balanceinertia": "true"})
+    ET.SubElement(mujoco, "compiler", {"angle": "radian", "autolimits": "true",
+                                        "balanceinertia": "true", "meshdir": "meshes"})
     ET.SubElement(mujoco, "option", {"timestep": "0.005", "gravity": "0 0 -9.81", "iterations": "50", "solver": "Newton"})
 
     default = ET.SubElement(mujoco, "default")
@@ -402,6 +531,8 @@ def main() -> int:
     ET.SubElement(asset, "texture", {"name": "grid", "type": "2d", "builtin": "checker", "width": "256", "height": "256",
                                        "rgb1": "0.2 0.3 0.4", "rgb2": "0.3 0.4 0.5"})
     ET.SubElement(asset, "material", {"name": "grid", "texture": "grid", "texrepeat": "10 10", "reflectance": "0.2"})
+    for name in sorted(mesh_bodies):
+        ET.SubElement(asset, "mesh", {"name": f"{name}_mesh", "file": f"{name}.obj"})
 
     worldbody = ET.SubElement(mujoco, "worldbody")
     ET.SubElement(worldbody, "light", {"name": "spot", "pos": "0 0 3", "dir": "0 0 -1", "directional": "true"})
@@ -421,19 +552,10 @@ def main() -> int:
         "diaginertia": fmt(np.maximum(root_info["diag_inertia"], 1e-7)),
         "quat": fmt(root_info["principal_axes"]),
     })
-    root_aabb = aabb_for_body(base_stage, root_info["name"])
-    if root_aabb is not None:
-        bmin, bmax = root_aabb
-        center = (bmin + bmax) / 2
-        half = np.maximum((bmax - bmin) / 2, 1e-3)
-        ET.SubElement(root_elem, "geom", {
-            "name": f"{root_info['name']}_geom",
-            "type": "box",
-            "pos": fmt(center),
-            "size": fmt(half),
-            "class": "body_visual",
-        })
-    _emit_subtree(root_elem, root_path, root_info["world_xf"], bodies, children_of, base_stage)
+    add_geoms(root_elem, root_info["name"], aabb_for_body(base_stage, root_info["name"]),
+              root_info["name"] in mesh_bodies)
+    _emit_subtree(root_elem, root_path, root_info["world_xf"], bodies, children_of,
+                  base_stage, mesh_bodies)
 
     # Equality constraints for closure joints
     equality = ET.SubElement(mujoco, "equality")

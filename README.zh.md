@@ -18,6 +18,7 @@
 [快速开始](#-一分钟上手) ·
 [训练参数](#-训练脚本参数) ·
 [播放结果](#-播放训练结果) ·
+[评估结果](#-评估训练结果) ·
 [自定义奖励](#-自定义-reward)
 
 </div>
@@ -38,6 +39,10 @@
     - [已验证版本组合](#已验证版本组合)
     - [🚀 一键安装](#-一键安装)
   - [🎬 播放训练结果](#-播放训练结果)
+  - [📊 评估训练结果](#-评估训练结果)
+    - [⚙️ `eval.py` 参数](#️-evalpy-参数)
+    - [📋 指标说明](#-指标说明)
+    - [🧪 一键验证套件](#-一键验证套件)
   - [📦 闭链 USD 注意事项](#-闭链-usd-注意事项)
   - [🏆 自定义 Reward](#-自定义-reward)
     - [1️⃣ 编辑 Reward 实现](#1️⃣-编辑-reward-实现)
@@ -252,6 +257,73 @@ python scripts/rsl_rl/play.py \
 ```
 
 </details>
+
+---
+
+## 📊 评估训练结果
+
+> 训练 reward 高 ≠ 真实表现好。播放只是肉眼看，**定量验证**才能发现 reward hacking、步态异常、力矩不足、泛化差等问题。
+
+`scripts/rsl_rl/eval.py` 以**多并行环境、关闭探索噪声**的方式跑策略，直接读取环境内部真实状态（速度、跌倒判定、12 个关节力矩、足端 body、地形原点）统计一整套指标，并写出 JSON；`eval_report.py` 把多个 JSON 汇总成验证表 + CSV。
+
+```bash
+# 平地基线：64 个环境跑 3000 步（=60s，约数十个回合）
+python scripts/rsl_rl/eval.py \
+    --headless --num_envs 64 --num_steps 3000 \
+    --load_run 2026-06-07_22-11-43 --tag flat_default
+
+# 结果默认写到 <checkpoint目录>/eval/<tag>.json
+```
+
+### ⚙️ `eval.py` 参数
+
+| 参数 | 默认 | 说明 |
+|:---|:---:|:---|
+| `--load_run` | `.*` | 选择 `logs/rsl_rl/<exp>/` 下的训练 run（正则） |
+| `--checkpoint` | `model_.*.pt` | checkpoint 文件名正则，或直接给 `.pt` 绝对路径 |
+| `--num_envs` | `64` | 并行评估环境数，越多统计越稳 |
+| `--num_steps` | `3000` | 控制步数（dt=0.02s；1000 步 = 一个完整回合） |
+| `--tag` | `eval` | 结果标签，决定 JSON 文件名与报告分组 |
+| `--terrain` | `flat` | `flat` / `rough` / `curriculum` |
+| `--cmd_vx/--cmd_vy/--cmd_wz` | 训练值 | 覆盖速度/偏航指令（指令泛化测试） |
+| `--friction` | — | 覆盖地面静/动摩擦（泛化测试） |
+| `--mass_scale` | `1.0` | 按比例缩放机器人质量（负载测试，例 `1.1`=+10%） |
+| `--obs_noise` | `0.0` | 观测高斯噪声标准差（传感器噪声测试） |
+| `--action_delay` | `0` | 动作延迟步数（每步 20ms；sim-to-real 延迟测试） |
+| `--push_interval_s` / `--push_vel` | `0` / `0.5` | 每隔 N 秒对 base 施加随机水平速度冲量（推搡测试） |
+
+### 📋 指标说明
+
+| 类别 | 指标 | 含义 |
+|:---|:---|:---|
+| 🟢 存活 | `success_rate` / `fall_rate` / `mean_survival_s` | 回合走完率 / 跌倒率 / 平均存活时间 |
+| 🎯 跟踪 | `vx_rmse` / `vy_mae` / `yaw_mae` | 速度/偏航跟踪误差（指令 vs 实际） |
+| 🧍 姿态 | `mean_base_height` / `mean_upright_err` | base 高度（目标 0.32）/ 倾斜误差 |
+| 🔋 能耗 | `mean_power_w` / `mean_cot` | 平均机械功率 / 运输成本 CoT = E/(m·g·d) |
+| ⚙️ 力矩 | per-joint `abs_mean` / `rms` / `abs_max` / `near_limit_frac` | 每关节力矩统计 + **近上限占比**（上限自动读 `effort_limit_sim`） |
+| 🦿 步态 | `duty_factor` / `touchdown_hz` / `diag_inphase_rate` | 占空比 / 触地频率 / 对角同相位率（判断 trot vs bound） |
+| 👣 打滑 | `mean_foot_slip` | 接触脚水平速度平方和 |
+
+> [!NOTE]
+> 本闭链 USD 没有接触传感器，步态指标用**足端 body 高度**近似接触判定。
+> 指令不进 observation（固定单指令训练），所以指令泛化测试是“换指令重建环境跑一遍”。
+
+### 🧪 一键验证套件
+
+`eval_suite.sh` 按“仿真泛化 → sim-to-real、简单 → 复杂”的顺序跑完整验证表（指令 / 地形 / 摩擦 / 质量 / 推搡 / 噪声 / 延迟），最后自动汇总：
+
+```bash
+# 用法: eval_suite.sh [LOAD_RUN] [NUM_ENVS] [NUM_STEPS]
+scripts/rsl_rl/eval_suite.sh 2026-06-07_22-11-43 64 3000
+
+# 单独汇总已有 JSON（纯标准库，无需 Isaac，可在任意机器跑）
+python scripts/rsl_rl/eval_report.py \
+    logs/rsl_rl/mos2026_2_closed_usd/<RUN>/eval --csv table.csv
+```
+
+> [!TIP]
+> 每个测试条件都是一次独立的 Isaac 进程（启动较慢但相互隔离、结果干净）。
+> 只想跑其中几项时，把 `eval_suite.sh` 里不需要的行注释掉即可。
 
 ---
 

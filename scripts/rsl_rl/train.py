@@ -8,7 +8,7 @@ from datetime import datetime
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Train a StackForce closed-chain USD task with RSL-RL.")
-parser.add_argument("--num_envs", type=int, default=4096)
+parser.add_argument("--num_envs", type=int, default=16000)
 parser.add_argument("--task", type=str, default="StackForce-Mos20262ClosedUsd-ClosedUsd-v0")
 parser.add_argument("--agent", type=str, default="rsl_rl_cfg_entry_point")
 parser.add_argument("--seed", type=int, default=None)
@@ -37,6 +37,14 @@ parser.add_argument(
         "num_envs — pair it with --num_envs if you also need fewer envs."
     ),
 )
+# --- SwanLab 实验跟踪（通过 TensorBoard 同步镜像 rsl_rl 的所有标量）---
+parser.add_argument("--no_swanlab", action="store_true",
+                    help="关闭 SwanLab 实验跟踪（默认开启；未安装 swanlab 时自动跳过）。")
+parser.add_argument("--swanlab_project", type=str, default="stackforce-mos",
+                    help="SwanLab 项目名。")
+parser.add_argument("--swanlab_mode", type=str, default="cloud",
+                    choices=["cloud", "local", "offline", "disabled"],
+                    help="SwanLab 运行模式：cloud 上传云端 / local 本地看板 / offline 离线缓存 / disabled 关闭。")
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + hydra_args
@@ -323,6 +331,72 @@ def _scale_physx_gpu_caps(env_cfg, max_gpu_mem_gb: float) -> None:
             print(f"  {field}: {old} -> {new}", flush=True)
 
 
+def _init_swanlab(args_cli, agent_cfg, env_cfg, log_dir):
+    """启动 SwanLab 并把 rsl_rl 的 TensorBoard 标量自动镜像过去。
+
+    用 SwanLab 的 tensorboard 同步（patch SummaryWriter 的 add_scalar 等方法），
+    所以无需改动 rsl_rl 的 OnPolicyRunner —— 它照常写 TensorBoard，标量会同时
+    进入 SwanLab。必须在 runner 调用 add_scalar 之前调用（这里在建 runner 前调）。
+
+    任何失败都只打印告警、返回 None，绝不影响训练本身。
+    """
+    if args_cli.no_swanlab or args_cli.swanlab_mode == "disabled":
+        return None
+    try:
+        import swanlab
+    except ImportError:
+        print("[SwanLab] 未安装，跳过实验跟踪。安装：pip install swanlab", flush=True)
+        return None
+    try:
+        config = {
+            "task": args_cli.task,
+            "num_envs": env_cfg.scene.num_envs,
+            "max_iterations": agent_cfg.max_iterations,
+            "seed": getattr(agent_cfg, "seed", None),
+            "terrain": args_cli.terrain,
+            "max_gpu_mem": args_cli.max_gpu_mem,
+            # 关键环境/奖励超参（便于在 SwanLab 里跨实验对比）
+            "commanded_lin_vel_xy": getattr(env_cfg, "commanded_lin_vel_xy", None),
+            "commanded_ang_vel_z": getattr(env_cfg, "commanded_ang_vel_z", None),
+            "base_height_target": getattr(env_cfg, "base_height_target", None),
+            "action_scale": getattr(env_cfg, "action_scale", None),
+            "tracking_sigma": getattr(env_cfg, "tracking_sigma", None),
+            "reward_scales": getattr(env_cfg, "reward_scales", None),
+        }
+        try:
+            actuator = env_cfg.robot.actuators["main_joints"]
+            config["effort_limit_sim"] = getattr(actuator, "effort_limit_sim", None)
+            config["velocity_limit_sim"] = getattr(actuator, "velocity_limit_sim", None)
+        except (AttributeError, KeyError, TypeError):
+            pass
+        swanlab.init(
+            project=args_cli.swanlab_project,
+            experiment_name=os.path.basename(log_dir),
+            config=config,
+            logdir=log_dir,
+            mode=args_cli.swanlab_mode,
+        )
+        # 镜像 rsl_rl 的 TensorBoard 标量（不同 swanlab 版本函数名略有差异）
+        synced = False
+        for fn_name in ("sync_tensorboard_torch", "sync_tensorboardX", "sync_tensorboard"):
+            fn = getattr(swanlab, fn_name, None)
+            if callable(fn):
+                fn()
+                synced = True
+                break
+        if not synced:
+            print("[SwanLab] 未找到 tensorboard 同步函数，标量可能不会镜像（升级 swanlab 可修复）。", flush=True)
+        print(
+            f"[SwanLab] 已启用 project={args_cli.swanlab_project} "
+            f"exp={os.path.basename(log_dir)} mode={args_cli.swanlab_mode}",
+            flush=True,
+        )
+        return swanlab
+    except Exception as exc:  # noqa: BLE001
+        print(f"[SwanLab] 初始化失败，继续训练（仅 TensorBoard）：{exc}", flush=True)
+        return None
+
+
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
@@ -361,6 +435,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRun
     print(f"[INFO] Logging experiment in directory: {log_dir}")
     env_cfg.log_dir = log_dir
 
+    # 启动 SwanLab（在建 runner / 写 TensorBoard 之前），失败不影响训练。
+    swan = _init_swanlab(args_cli, agent_cfg, env_cfg, log_dir)
+
     env = gym.make(args_cli.task, cfg=env_cfg)
     wrapped_env = LegacyRslRlVecEnvWrapper(env, clip_actions=getattr(agent_cfg, "clip_actions", None))
     runner = OnPolicyRunner(wrapped_env, to_compatible_rsl_rl_cfg(agent_cfg), log_dir=log_dir, device=agent_cfg.device)
@@ -372,6 +449,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRun
     runner.save(checkpoint_path)
     print(f"Training time: {round(time.time() - start_time, 2)} seconds", flush=True)
     print(f"TRAINING_COMPLETED checkpoint={checkpoint_path}", flush=True)
+    if swan is not None:
+        try:
+            swan.finish()
+        except Exception:  # noqa: BLE001
+            pass
     env.close()
 
 
