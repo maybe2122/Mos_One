@@ -18,6 +18,30 @@
 
 ---
 
+## ⏭️ 下一步（可立即执行，按优先级｜更新于 2026-06-09）
+
+> 本轮（2026-06-08/09）在 env_isaaclab + RTX5090 上已落地并验证：ONNX 导出+数值校验、
+> 域随机化冒烟、旧 checkpoint 格式转换器、速度扫描定论。基于这些发现，下一步最该做：
+
+1. **[最高] 指令条件化重训（解锁速度-力矩扫描）**：当前策略指令不进 obs（固定单指令），
+   实测对 `--cmd_vx` 完全无响应（见 §力矩专项「速度-力矩扫描」）。把 vx/vy/wz 三维指令
+   加进 observation（45→48 维），重训后才能用 `eval.py --cmd_vx {...}` + `eval_plot.py`
+   刻画力矩-速度包络、定真机可行速度上限。**同时要同步改 `deploy/real/rl_deploy.py`
+   `_build_obs` 与 `policy_export.py` 的 `OBS_DIM`。**
+2. **[高] 力矩惩罚重训对比（根因验证）**：`reward_scales["torque"] = -2e-4` 起步重训
+   （骨架已落地，opt-in），用转换器/新 checkpoint + `eval_plot.py` 对比 `near_limit_frac`
+   / CoT / 功率，确认 `fl/rl/rr_shank` 的 ≥80% 饱和是否缓解；按结果微调权重。
+3. **[高] 域随机化正式训练**：冒烟已通过，放量 `--domain_rand --obs_noise_std 0.02`
+   跑收敛模型，与无 DR 基线对比抗扰/泛化（推搡、摩擦、±质量）。
+4. **[中] MuJoCo FK 对齐（§E 收尾）**：装 mujoco + XML 加 foot site，随机关节角下
+   FK 足端 vs `mj_forward` 的 `xpos` 对比；标定 `L_shank` 与闭链传动映射。
+5. **[中] `play_mujoco.py` 复用导出产物（§C 收尾）**：改为加载 `policy_export.py` 产出的
+   `policy.pt`/`.onnx`，删掉硬编码 `[256,256,128]` 重建，彻底消除「结构一变静默错」。
+6. **[低] 训练侧 actuator 延迟/带宽**（§A 未覆盖项）：作为 EventTerm 或 env 内缓冲实现，
+   配合 `eval.py --action_delay` 评估侧形成闭环。
+
+---
+
 ## 🎯 后续工作（力矩/电流不足专项）
 
 > 目标：定位力矩/电流缺口的根因，先让站立稳定且有余量，再谈行走。
@@ -58,7 +82,17 @@
     CoT 后微调（需 Isaac/GPU）。
 - [ ] **抬高站姿**：base 高度只有 **0.256**（目标 0.32，低 20%），蹲低直接抬高膝/踝力矩需求 → 调大 `base_height` 权重或核对目标可达性。
 - [ ] **修接触阈值**：`foot_contact_height_threshold=0.07` 太低，shank body 中心始终高于阈值 → **`foot_slip` 奖励训练时大概率从未生效**，步态/打滑指标也全退化。抬到 ~0.15（评估时可用 `eval.py --foot_contact_height 0.15` 验证）。
-- [ ] **速度-力矩扫描**：用 `eval.py --cmd_vx {0.3,0.6,1.0,1.3}` + `eval_plot.py` 看 `_compare.png`，确认力矩饱和随指令速度如何恶化，定出真机可行的速度上限。
+- [~] **速度-力矩扫描**（2026-06-09 跑了，**结论：当前策略做不了这条扫描**）：
+  用 `eval.py --cmd_vx {0.3,0.6,1.0,1.3}`（model_750）实测——4 个指令下**实际 vx 恒为 0.991、
+  力矩/CoT/功率/饱和关节全部逐位相同**（near_limit 40.4%、CoT 4.49、功率 515W、`fl/rl/rr_shank`
+  恒 ≥80% 饱和）。只有 `vx_mae` 随指令变（0.3→0.70 / 1.0→0.04 / 1.3→0.31），证明 `cmd_vx`
+  确实进了「跟踪误差参考」但**完全没进 policy 行为**——即 §A「指令不进 observation、固定单指令
+  训练」的直接后果：**该策略只有单一速度，无速度可控性**。
+  - → 要刻画「力矩随速度恶化」定真机速度上限，必须先把**指令喂进 obs 重训指令条件化策略**
+    （或每个速度各训一个）。在那之前这条扫描无意义。
+  - 🔧 配套交付：旧 checkpoint 是 `actor/critic_state_dict` 格式（老 rsl_rl 训练），env_isaaclab
+    新 rsl_rl 的 `runner.load` 只认 `model_state_dict` → `tools/convert_checkpoint_to_rsl_rl.py`
+    做纯键名重映射转换（已验证转换后 eval 指标与原始逐位一致），解锁旧模型在当前环境 eval/play。
 
 ---
 
