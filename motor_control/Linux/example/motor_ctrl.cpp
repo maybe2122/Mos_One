@@ -44,8 +44,13 @@ static const int MIN_MOTOR_ID = 1;
 static const int MAX_MOTOR_ID = 12;
 
 // 调试打印间隔(ms)：servo / moveto 每隔这么久打印一行【全部参数】。
-// 调小（如 20）能看清震动细节，但日志更密；调大更安静。
-static long PRINT_INTERVAL_MS = 200;
+// 可通过环境变量 MOTOR_CTRL_FB_MS 覆盖（如 export MOTOR_CTRL_FB_MS=20 获得 50 Hz 反馈）。
+// 默认 20ms（50 Hz），适合 rl_deploy.py 的控制循环；robot_web.py 也因更快刷新而受益。
+static long PRINT_INTERVAL_MS = []() -> long {
+    const char *env = std::getenv("MOTOR_CTRL_FB_MS");
+    if (env && std::atol(env) > 0) return std::atol(env);
+    return 20;
+}();
 
 static std::atomic<bool> g_stop_requested(false);
 

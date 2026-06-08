@@ -85,14 +85,21 @@
   - → 出一版「真机同款受限观测 + 估计器」的 MuJoCo 闭环。
 - [ ] **缺真机 obs 构建 / 单位对齐文档**：IMU 系→机体系旋转；关节方向/零位（注意编码器掉电丢整圈的隐患）；关节顺序映射（`joint_map.default.json` 未与 obs 的 12 维顺序对账）。
 
-### D. 实机部署侧（RL 与硬件之间断开）
+### D. 实机部署侧
 
-- [ ] **`robot_web.py` 里没有任何 RL 推理**：真机现在只会 PD 站立，policy → 真机这条链完全没接（站起来 → 走起来 之间最大空洞）。
-- [ ] **无实时控制回路**：robot_web 是网页指令式，不是定频实时控制器。
-  - → 写独立的 **50 Hz 确定性控制进程**（与训练 decimation 对齐）：读 IMU+编码器 → 组 obs → policy → 下发力矩/位置。
-- [ ] **无 IMU 接入与机身状态估计**：obs 需 ang_vel + projected_gravity（IMU 可给）+ lin_vel（必须估计）；真机侧暂无 IMU 读取代码。
-- [ ] **RL 上机安全**：已有急停（estop），但缺「policy 输出限幅 / 看门狗 / 姿态超限自动软急停」。
-  - → 先在悬吊/低增益下空跑验证 obs 正确，再落地。
+- [x] **`deploy/real/rl_deploy.py`（2026-06-08 完成）**：50 Hz 确定性控制进程，
+  连接 robot_web 已有的 motor_ctrl servo 接口，实现完整的 policy → 真机链路。
+  - 关节状态从 servo FB 行异步读取（motor_ctrl 已重编，FB 默认 20ms = 50 Hz）
+  - 45 维 obs 按训练合约组建；坐标转换（旋子↔sim）由 `JointMeta` 封装
+  - 动作 clip + action_scale 与训练 env 对齐；prev_action 正确维护
+  - 安全：`--max_pitch_roll` 姿态超限急停（imu stub 阶段不生效）；Ctrl-C 干净退出
+  - `--no_rl` 模式可在不跑 policy 情况下验证 obs 读取正确性
+- [ ] **IMU 接入**（当前 `imu_source="stub"`）：
+  - ang_vel=0、gravity_vec=[0,0,-1]，policy 降级运行（建议先吊线/低增益验证）
+  - → 有真实 IMU 后在 `rl_deploy.py` 的 `_build_obs` 里扩展 imu_source 分支
+- [ ] **线速度估计**（`lin_vel_source="zero"`）：obs[0:3]=0 → policy 降级，行走性能受限
+  - → 最终方案：重训时去掉 lin_vel 或接入 HIM 估计器
+- [ ] **首次上机流程**：先吊线 + `--no_rl` 验证 obs 读数（q_sim ≈ 0 在站姿），再切 RL 低速测试
 
 ---
 
