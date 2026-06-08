@@ -356,6 +356,13 @@ static int run_moveto(const std::string &port, int id, double move_deg,
 }
 
 int main(int argc, char **argv) {
+    // 允许用环境变量调打印/反馈节流：deploy/real 的 RL 控制环把它设成 0，
+    // 让 servo 每个总线周期都吐一行 FB（≈总线速率），满足 50Hz obs 的关节反馈需求。
+    if (const char *e = std::getenv("MOTOR_CTRL_PRINT_MS")) {
+        long v = std::atol(e);
+        if (v >= 0) PRINT_INTERVAL_MS = v;
+    }
+
     // 流式位置伺服：motor_ctrl <port> servo <kp> <kw>（action 在 argv[2]，无 id 位）
     if (argc >= 3 && std::string(argv[2]) == "servo") {
         if (argc < 5) {

@@ -105,6 +105,25 @@ hardware:
   control_hz: 50               # policy decision rate; must equal dt*decimation^-1
   motor_ctrl_bin: "../../motor_control/Linux/build/motor_ctrl"
   stand_config: "../../motor_control/config/stand_config.json"
+
+  # --- motor-side PD gains (CRITICAL sim2real knob, READ THIS) ---------------
+  # `motor_ctrl servo <kp> <kw>` runs the GO-M8010-6's internal PD in ROTOR
+  # space:  rotor_torque = kp*(rotor_target - rotor) + kw*(W_target - W) + T.
+  # Isaac trained with JOINT-space stiffness=25, damping=0.5. Because a gear
+  # reducer maps rotor<->joint by N=6.33, the rotor-side gains that *reproduce*
+  # the trained joint stiffness are:
+  #     motor_kp = rl_kp / N^2 = 25 / 40.07 ~= 0.62
+  #     motor_kw = rl_kd / N^2 = 0.5 / 40.07 ~= 0.0125
+  # That is very soft and may not hold the robot up on a first bring-up.
+  # The existing (working) standing controller instead uses kp~=8..25 directly.
+  # We DEFAULT to the conservative stand value that is known to physically hold
+  # this robot, and leave matching-the-sim-dynamics as a tuning step (README
+  # blocker "gain mismatch"). Validate on hardware before trusting a walk.
+  motor_kp: 8.0
+  motor_kw: 0.08
+  # Seconds to ramp from the measured prone pose into the sim default (stand)
+  # pose during getup. Slow ramp keeps peak current/torque down.
+  getup_seconds: 3.0
   # ang_vel / gravity_vec source. "stub" = zeros (SAFE, robot will NOT balance);
   # set to "serial"/"udp" once a real IMU driver is wired in state_sources.py.
   imu_source: "stub"
