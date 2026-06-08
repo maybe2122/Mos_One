@@ -44,6 +44,7 @@
     - [⚙️ `eval.py` 参数](#️-evalpy-参数)
     - [📋 指标说明](#-指标说明)
     - [🧪 一键验证套件](#-一键验证套件)
+  - [🦿 控制栈：运动学 / 步态 / 动力学 / Sim2Real](#-控制栈运动学--步态--动力学--sim2real)
   - [📦 闭链 USD 注意事项](#-闭链-usd-注意事项)
   - [🏆 自定义 Reward](#-自定义-reward)
     - [1️⃣ 编辑 Reward 实现](#1️⃣-编辑-reward-实现)
@@ -382,6 +383,33 @@ python scripts/rsl_rl/eval_report.py \
 > [!TIP]
 > 每个测试条件都是一次独立的 Isaac 进程（启动较慢但相互隔离、结果干净）。
 > 只想跑其中几项时，把 `eval_suite.sh` 里不需要的行注释掉即可。
+
+---
+
+## 🦿 控制栈：运动学 / 步态 / 动力学 / Sim2Real
+
+> 纯 RL 端到端之外补齐的**经典运控层**与 **sim2real 必需项**——RL 上真机、传统控制
+> baseline、执行器选型的基础。完整说明见 **[📄 doc/control_stack.md](./doc/control_stack.md)**，
+> 动力学/选型见 **[📄 doc/dynamics_gear_ratio_analysis.md](./doc/dynamics_gear_ratio_analysis.md)**。
+
+| 模块 | 文件 | 一键验证 |
+|:---|:---|:---|
+| 🦵 腿部 FK/IK（解析，4 腿向量化） | `deploy/common/kinematics.py` | `--selftest`（往返 1e-16） |
+| 🐾 足端轨迹 trot 步态（摆线摆动 + IK） | `deploy/common/gait.py` | `--selftest` / `--demo` / `--linkage` |
+| ⚙️ 动力学 + 减速比选型 | `deploy/common/dynamics.py` | `--plot` |
+| 🎲 域随机化 / 观测噪声 | `EventCfg` + `train.py --domain_rand` | env_isaaclab 冒烟 √ |
+| 🔋 力矩惩罚奖励（opt-in） | `custom_rewards.py` `sum(τ²)` | `reward_scales["torque"]` |
+| 📦 Policy 导出 TorchScript+ONNX | `deploy/real/policy_export.py` | 数值一致性门 `<1e-4` |
+
+```bash
+# deploy/common/* 纯 numpy，无需 Isaac（用根目录 .venv）
+.venv/bin/python deploy/common/kinematics.py --selftest
+.venv/bin/python deploy/common/gait.py --demo          # → outputs/gait_demo/
+.venv/bin/python deploy/common/dynamics.py --plot      # → outputs/dynamics/
+```
+
+> 💡 **减速比结论**：现用 6.33 已接近最优（余量平衡最优 N\*=6.16）；真机「力矩/电流不足」
+> 根因不是减速比，而是 `effort_limit_sim` 卡需求线 + 驱动器电流上限/母线掉压。
 
 ---
 
