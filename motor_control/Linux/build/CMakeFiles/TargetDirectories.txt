@@ -1,5 +1,0 @@
-/home/maybe/code/rl/Stackforce-Mos/motor_control/Linux/build/CMakeFiles/motorctrl.dir
-/home/maybe/code/rl/Stackforce-Mos/motor_control/Linux/build/CMakeFiles/stop.dir
-/home/maybe/code/rl/Stackforce-Mos/motor_control/Linux/build/CMakeFiles/motor_ctrl.dir
-/home/maybe/code/rl/Stackforce-Mos/motor_control/Linux/build/CMakeFiles/edit_cache.dir
-/home/maybe/code/rl/Stackforce-Mos/motor_control/Linux/build/CMakeFiles/rebuild_cache.dir

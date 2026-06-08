@@ -1,1 +1,0 @@
-/usr/bin/c++  -std=c++11 -O3 CMakeFiles/motor_ctrl.dir/example/motor_ctrl.cpp.o -o motor_ctrl   -L/home/maybe/code/rl/Stackforce-Mos/motor_control/Linux/lib  -Wl,-rpath,/home/maybe/code/rl/Stackforce-Mos/motor_control/Linux/lib -lUnitreeMotorSDK_M80106_Linux64 

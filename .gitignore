@@ -4,3 +4,6 @@ outputs/
 .claude/
 *.pyc
 __pycache__/
+
+# CMake 构建产物（每次构建都会重新生成，不应入库）
+motor_control/Linux/build/

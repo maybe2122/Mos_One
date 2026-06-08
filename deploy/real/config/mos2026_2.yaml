@@ -1,141 +1,137 @@
 # =============================================================================
-# mos2026_2 — real-robot deployment config (rl_sar-compatible schema)
+# mos2026_2 — 实机部署配置（兼容 rl_sar 的 schema）
 # =============================================================================
-# This file does double duty:
+# 本文件身兼两职：
 #
-#   1. The top-level `mos2026_2:` block follows fan-ziqi/rl_sar's config.yaml
-#      schema (observations / scales / action_scale / rl_kp / rl_kd /
-#      torque_limits / default_dof_pos / decimation / dt ...).  Drop it under
-#      rl_sar's `policy/mos2026_2/config.yaml` together with the TorchScript
-#      model produced by `deploy/real/policy_export.py` and rl_sar's RL core
-#      will reproduce *exactly* the contract this robot was trained on.
+#   1. 顶层 `mos2026_2:` 区块遵循 fan-ziqi/rl_sar 的 config.yaml schema
+#      （observations / scales / action_scale / rl_kp / rl_kd /
+#      torque_limits / default_dof_pos / decimation / dt ...）。把它和
+#      `deploy/real/policy_export.py` 导出的 TorchScript 模型一起放到 rl_sar 的
+#      `policy/mos2026_2/config.yaml`，rl_sar 的 RL 核心就能*精确*复现本机器人
+#      训练时的契约。
 #
-#   2. The extra `hardware:` block wires the 12 logical joints to the real
-#      Unitree GO-M8010-6 serial buses and carries the sim<->motor coordinate
-#      mapping.  rl_sar's upstream drivers speak Unitree DDS/UDP and CANNOT
-#      drive these serial motors, so the standalone node in this folder
-#      (`rl_deploy.py`) consumes `hardware:` to talk to `motor_ctrl servo`.
+#   2. 额外的 `hardware:` 区块把 12 个逻辑关节接到真实的 Unitree GO-M8010-6
+#      串口总线上，并携带 sim<->电机 的坐标映射。rl_sar 上游驱动走 Unitree
+#      DDS/UDP，*无法*驱动这些串口电机，所以本目录下的独立节点
+#      （`rl_deploy.py`）会消费 `hardware:` 去与 `motor_ctrl servo` 通信。
 #
-# EVERY number under `mos2026_2:` is copied verbatim from the trained Isaac Lab
-# env (mos2026_2_closed_usd_env_cfg.py) and the validated MuJoCo deploy
-# (deploy/mujoco/play_mujoco.py).  Do not "tune" them here — they define the
-# policy's input/output contract; changing them silently breaks the policy.
+# `mos2026_2:` 下的每一个数字都逐字拷贝自训练好的 Isaac Lab 环境
+# （mos2026_2_closed_usd_env_cfg.py）以及验证过的 MuJoCo 部署
+# （deploy/mujoco/play_mujoco.py）。不要在这里“调参”——它们定义了
+# 策略的输入/输出契约，擅自改动会悄无声息地破坏策略。
 # =============================================================================
 
 mos2026_2:
-  model_name: "policy.pt"          # TorchScript model from policy_export.py
+  model_name: "policy.pt"          # 由 policy_export.py 导出的 TorchScript 模型
 
-  # ----- observation contract (45 dims, NO commands, NO scaling) -------------
-  # Matches mos2026_2_closed_usd_env._get_observations() exactly:
+  # ----- 观测契约（45 维，无 commands，无缩放） -----------------------------
+  # 与 mos2026_2_closed_usd_env._get_observations() 完全一致：
   #   root_lin_vel_b(3) + root_ang_vel_b(3) + projected_gravity_b(3)
   #   + (joint_pos - default)(12) + joint_vel(12) + prev_action(12) = 45
-  # The env applies NO observation scaling and NO normalization
-  # (actor_obs_normalization=False), so every *_scale below is 1.0.
+  # 该环境不做任何观测缩放，也不做归一化
+  # （actor_obs_normalization=False），因此下面每个 *_scale 都是 1.0。
   num_observations: 45
   observations: ["lin_vel", "ang_vel", "gravity_vec", "dof_pos", "dof_vel", "actions"]
-  observations_history: []          # no frame stacking
+  observations_history: []          # 不做帧堆叠
   observations_history_priority: "time"
   clip_obs: 100.0
   lin_vel_scale: 1.0
   ang_vel_scale: 1.0
   dof_pos_scale: 1.0
   dof_vel_scale: 1.0
-  commands_scale: [1.0, 1.0, 1.0]   # unused (no "commands" in observations)
+  commands_scale: [1.0, 1.0, 1.0]   # 未使用（观测中没有 "commands"）
 
-  # ----- action contract -----------------------------------------------------
+  # ----- 动作契约 -----------------------------------------------------------
   # _pre_physics_step: a = clip(action, -1.5, 1.5);  target = action_scale*a + default
-  # rl_sar has no separate "action_clip", so we fold ±1.5 into clip_actions_*.
+  # rl_sar 没有单独的 "action_clip"，所以我们把 ±1.5 折进 clip_actions_*。
   clip_actions_lower: [-1.5, -1.5, -1.5, -1.5, -1.5, -1.5, -1.5, -1.5, -1.5, -1.5, -1.5, -1.5]
   clip_actions_upper: [ 1.5,  1.5,  1.5,  1.5,  1.5,  1.5,  1.5,  1.5,  1.5,  1.5,  1.5,  1.5]
   num_of_dofs: 12
   wheel_indices: []
-  # Per-joint action scale (env_cfg.action_scale): 0.5 hips, 0.8145 thigh/shank.
+  # 每关节动作缩放（env_cfg.action_scale）：髋关节 0.5，大腿/小腿 0.8145。
   action_scale: [0.5,    0.5,    0.5,    0.5,
                  0.8145, 0.8145, 0.8145, 0.8145,
                  0.8145, 0.8145, 0.8145, 0.8145]
 
-  # ----- on-robot PD (joint-space position control) --------------------------
-  # Training used ImplicitActuator stiffness=25, damping=0.5 (joint side).
-  # These run inside the GO-M8010-6 (rl_deploy converts to rotor-side K_P/K_W).
+  # ----- 机上 PD（关节空间位置控制） ----------------------------------------
+  # 训练用的是 ImplicitActuator stiffness=25, damping=0.5（关节侧）。
+  # 这些增益运行在 GO-M8010-6 内部（rl_deploy 会换算成转子侧 K_P/K_W）。
   rl_kp: [25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0]
   rl_kd: [0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5]
-  # Softer gains used while interpolating into the stand pose (getup ramp).
+  # 插值进入站立姿态（起身 ramp）期间使用的更软增益。
   fixed_kp: [12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0]
   fixed_kd: [0.8,  0.8,  0.8,  0.8,  0.8,  0.8,  0.8,  0.8,  0.8,  0.8,  0.8,  0.8]
 
-  # GO-M8010-6 rated peak is 23.7 N*m; training capped effort at 12 N*m. We
-  # protect at 12 N*m (joint side) so the deploy node refuses commands the
-  # motors were never trained to exceed.  See README "torque margin" blocker.
+  # GO-M8010-6 额定峰值为 23.7 N*m；训练时把力矩上限设为 12 N*m。我们在
+  # 12 N*m（关节侧）处做保护，使部署节点拒绝电机从未被训练过的超限指令。
+  # 详见 README 的 “torque margin”（力矩裕度）阻塞项。
   torque_limits: [12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0, 12.0]
 
-  # ----- default joint pose (radians, policy/sim frame) ----------------------
-  # = Mos20262ClosedUsdEnvCfg.init_state.joint_pos for the 12 actuated joints,
-  # in the joint order below.  The obs subtracts this; actions add it back.
+  # ----- 默认关节姿态（弧度，策略/sim 坐标系） ------------------------------
+  # = Mos20262ClosedUsdEnvCfg.init_state.joint_pos 中 12 个受控关节的值，
+  # 按下面的关节顺序排列。观测会减去它；动作会把它加回来。
   default_dof_pos: [ 0.15,  0.15, -0.15, -0.15,
                      0.00,  0.00,  0.00,  0.00,
                      0.00,  0.00,  0.00,  0.00]
 
-  # Joint order = policy/action order (env_cfg.actuated_joint_names).
+  # 关节顺序 = 策略/动作顺序（env_cfg.actuated_joint_names）。
   joint_names: ["fl_hip", "fr_hip", "rl_hip", "rr_hip",
                 "fl_thigh", "fr_thigh", "rl_thigh", "rr_thigh",
                 "fl_shank", "fr_shank", "rl_shank", "rr_shank"]
   joint_mapping: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 
-  # ----- timing --------------------------------------------------------------
-  dt: 0.005          # 200 Hz physics
-  decimation: 4      # -> 50 Hz policy control (matches training)
+  # ----- 时序 ---------------------------------------------------------------
+  dt: 0.005          # 200 Hz 物理仿真
+  decimation: 4      # -> 50 Hz 策略控制（与训练一致）
 
 # =============================================================================
-# hardware: serial wiring + sim<->motor coordinate mapping (rl_deploy.py only)
+# hardware: 串口接线 + sim<->电机 坐标映射（仅 rl_deploy.py 使用）
 # =============================================================================
-# Conversion (per joint), done in motor_bus.py:
+# 换算（逐关节），在 motor_bus.py 中完成：
 #
 #   rotor_target = stand_rotor + GEAR * dir * sim_sign * (q_sim - default_dof_pos)
 #   q_sim_meas   = default + (rotor_meas - stand_rotor) / (GEAR * dir * sim_sign)
 #   qdot_sim     = motor_W / (GEAR * dir * sim_sign)
 #
-# Reasoning: at the sim default pose (q_sim = default_dof_pos) the robot stands,
-# so the rotor must be at the *calibrated* standing rotor angle `stand_rotor`.
-# `dir` (motor-vs-joint sign) and `stand_rotor` come straight from
-# motor_control/config/stand_config.json.  `sim_sign` (+1/-1) absorbs any
-# sign mismatch between the USD/sim joint axis and the motor's joint axis and
-# MUST be verified on hardware before any RL run (see README step 4).
+# 原理：在 sim 默认姿态（q_sim = default_dof_pos）下机器人站立，因此转子必须
+# 处于*标定过的*站立转子角 `stand_rotor`。`dir`（电机 vs 关节符号）与
+# `stand_rotor` 直接来自 motor_control/config/stand_config.json。`sim_sign`
+# （+1/-1）用于吸收 USD/sim 关节轴与电机关节轴之间的符号不一致，在任何 RL
+# 运行前都*必须*在硬件上确认（见 README 第 4 步）。
 hardware:
   gear_ratio: 6.33
-  control_hz: 50               # policy decision rate; must equal dt*decimation^-1
+  control_hz: 50               # 策略决策频率；必须等于 (dt*decimation)^-1
   motor_ctrl_bin: "../../motor_control/Linux/build/motor_ctrl"
   stand_config: "../../motor_control/config/stand_config.json"
 
-  # --- motor-side PD gains (CRITICAL sim2real knob, READ THIS) ---------------
-  # `motor_ctrl servo <kp> <kw>` runs the GO-M8010-6's internal PD in ROTOR
-  # space:  rotor_torque = kp*(rotor_target - rotor) + kw*(W_target - W) + T.
-  # Isaac trained with JOINT-space stiffness=25, damping=0.5. Because a gear
-  # reducer maps rotor<->joint by N=6.33, the rotor-side gains that *reproduce*
-  # the trained joint stiffness are:
+  # --- 电机侧 PD 增益（关键的 sim2real 旋钮，务必阅读） ---------------------
+  # `motor_ctrl servo <kp> <kw>` 在转子空间运行 GO-M8010-6 的内部 PD：
+  #   rotor_torque = kp*(rotor_target - rotor) + kw*(W_target - W) + T。
+  # Isaac 训练用的是关节空间 stiffness=25, damping=0.5。由于减速器以
+  # N=6.33 映射 转子<->关节，能*复现*训练关节刚度的转子侧增益为：
   #     motor_kp = rl_kp / N^2 = 25 / 40.07 ~= 0.62
   #     motor_kw = rl_kd / N^2 = 0.5 / 40.07 ~= 0.0125
-  # That is very soft and may not hold the robot up on a first bring-up.
-  # The existing (working) standing controller instead uses kp~=8..25 directly.
-  # We DEFAULT to the conservative stand value that is known to physically hold
-  # this robot, and leave matching-the-sim-dynamics as a tuning step (README
-  # blocker "gain mismatch"). Validate on hardware before trusting a walk.
+  # 这非常软，首次上电时可能撑不起机器人。
+  # 现有（可用）的站立控制器则直接使用 kp~=8..25。
+  # 我们默认采用已知能在物理上稳住本机器人的保守站立值，把“匹配 sim 动力学”
+  # 留作调参步骤（README 阻塞项 “gain mismatch”/增益不匹配）。在信任行走
+  # 之前请先在硬件上验证。
   motor_kp: 8.0
   motor_kw: 0.08
-  # Seconds to ramp from the measured prone pose into the sim default (stand)
-  # pose during getup. Slow ramp keeps peak current/torque down.
+  # 起身过程中从测得的俯卧姿态插值到 sim 默认（站立）姿态所用的秒数。
+  # 缓慢 ramp 可压低峰值电流/力矩。
   getup_seconds: 3.0
-  # ang_vel / gravity_vec source. "stub" = zeros (SAFE, robot will NOT balance);
-  # set to "serial"/"udp" once a real IMU driver is wired in state_sources.py.
+  # ang_vel / gravity_vec 的来源。"stub" = 全零（安全，机器人不会平衡）；
+  # 在 state_sources.py 接入真实 IMU 驱动后改为 "serial"/"udp"。
   imu_source: "stub"
-  # base linear velocity source for obs[0:3]. The trained policy needs TRUE
-  # base lin vel which no sensor provides. "zero" feeds 0 (policy degraded but
-  # safe to bring up), "command" feeds the commanded velocity as a proxy.
-  # The correct fix is to retrain without lin_vel or with a HIM estimator (him/).
+  # obs[0:3] 的机体线速度来源。训练好的策略需要*真实*机体线速度，而没有
+  # 传感器能提供它。"zero" 喂 0（策略性能下降但上电安全），"command" 喂
+  # 指令速度作为代理值。正确做法是去掉 lin_vel 重新训练，或用 HIM 估计器（him/）。
   lin_vel_source: "zero"
 
-  # Per-joint serial map, in the SAME order as joint_names above (policy order).
-  # port/motor_id from motor_control/config/joint_map.default.json;
-  # dir/stand_rotor seeded from stand_config.json; sim_sign defaults +1 (VERIFY).
+  # 逐关节串口映射，顺序与上面的 joint_names 相同（策略顺序）。
+  # port/motor_id 来自 motor_control/config/joint_map.default.json；
+  # dir/stand_rotor 由 stand_config.json 初始化；sim_sign 默认 +1（请验证）。
   joints:
     - {name: fl_hip,   port: /dev/ttyUSB0, id: 1,  dir: -1, stand_rotor:  3.449738, sim_sign: 1}
     - {name: fr_hip,   port: /dev/ttyUSB1, id: 4,  dir:  1, stand_rotor:  6.963330, sim_sign: 1}
