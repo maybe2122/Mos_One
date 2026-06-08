@@ -1,26 +1,31 @@
 #!/usr/bin/env python3
-"""Export a trained rsl_rl PPO actor to a TorchScript policy for real-robot deploy.
+"""Export a trained rsl_rl PPO actor to TorchScript + ONNX for real-robot deploy.
 
 The Isaac Lab training run saves an rsl_rl checkpoint whose `actor_state_dict`
 holds the actor MLP weights plus a Gaussian `std` parameter. Neither rl_sar's
 InferenceRuntime nor the standalone `rl_deploy.py` node can consume that raw
-state-dict — both expect a self-contained TorchScript module that maps a
-45-dim observation to a 12-dim action mean.
+state-dict — both expect a self-contained module that maps a 45-dim observation
+to a 12-dim action mean. ONNX additionally lets non-PyTorch runtimes (C++ /
+onnxruntime on an MCU-class board) run the same policy.
 
 This script:
   1. Loads the checkpoint (default: newest model_*.pt under logs/rsl_rl),
   2. Rebuilds the exact [256, 256, 128]-ELU actor from rsl_rl's ActorCriticCfg,
   3. Drops the std parameter (we deploy the deterministic mean),
-  4. torch.jit.trace's it and saves deploy/real/policy/policy.pt,
-  5. Verifies the scripted module reproduces the eager output bit-for-bit.
+  4. torch.jit.trace's it -> deploy/real/policy/policy.pt, verifying the scripted
+     module reproduces the eager output bit-for-bit,
+  5. torch.onnx.export's it -> deploy/real/policy/policy.onnx, structurally
+     checks it (onnx.checker) and verifies onnxruntime output == eager torch
+     output on random inputs (the numerical-consistency gate from todo §C).
 
-The result is drop-in compatible with fan-ziqi/rl_sar: copy it next to
-config/mos2026_2.yaml as `policy/mos2026_2/policy.pt`.
+The TorchScript file is drop-in compatible with fan-ziqi/rl_sar: copy it next
+to config/mos2026_2.yaml as `policy/mos2026_2/policy.pt`.
 
 Example:
     python deploy/real/policy_export.py
     python deploy/real/policy_export.py \
         --checkpoint logs/rsl_rl/mos2026_2_closed_usd/2026-05-16_22-22-39/model_1500.pt
+    python deploy/real/policy_export.py --no_onnx   # TorchScript only
 """
 from __future__ import annotations
 
@@ -38,6 +43,13 @@ DEFAULT_OUT = Path(__file__).resolve().parent / "policy" / "policy.pt"
 OBS_DIM = 45
 ACTION_DIM = 12
 HIDDEN = (256, 256, 128)
+# Parity tolerance for scripted/onnx vs eager torch. fp32 MLP round-trips exactly
+# through TorchScript (0.0); ONNX reorders/fuses matmuls so an O(1) action can
+# differ by ~1e-5. 1e-4 still flags any structural error (wrong weights / missing
+# layer / bad opset give O(0.1)+), while tolerating fp32 reassociation.
+PARITY_TOL = 1e-4
+PARITY_SAMPLES = 256
+PARITY_SEED = 0
 
 
 def find_latest_checkpoint() -> Path | None:
@@ -93,6 +105,62 @@ def load_actor(checkpoint_path: Path) -> ActorMLP:
     return actor
 
 
+def export_onnx(actor: ActorMLP, out_path: Path) -> float:
+    """Export `actor` to ONNX, structurally check it, and verify onnxruntime
+    output == eager torch output. Returns the max abs error.
+
+    Raises if onnx export / structural check fails or parity exceeds PARITY_TOL.
+    Requires `onnx`; `onnxruntime` is optional — without it we still export and
+    run the structural checker, but skip the numerical gate (and say so).
+    """
+    import onnx  # hard dep for export validity
+
+    example = torch.zeros(1, OBS_DIM)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    # Legacy TorchScript-based exporter (dynamo default flipped in newer torch);
+    # fall back gracefully if the `dynamo` kwarg is unknown on this torch build.
+    export_kwargs = dict(
+        input_names=["obs"],
+        output_names=["action"],
+        dynamic_axes={"obs": {0: "batch"}, "action": {0: "batch"}},
+        opset_version=17,
+    )
+    # We deliberately keep the legacy TorchScript exporter: this is a tiny static
+    # MLP, and the legacy path is the most numerically reproducible here. Silence
+    # its "dynamo will be default" deprecation notice — it is not actionable.
+    import warnings
+    with torch.no_grad(), warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*legacy TorchScript-based ONNX export.*")
+        try:
+            torch.onnx.export(actor, example, str(out_path), dynamo=False, **export_kwargs)
+        except TypeError:
+            torch.onnx.export(actor, example, str(out_path), **export_kwargs)
+
+    onnx.checker.check_model(onnx.load(str(out_path)))
+
+    try:
+        import numpy as np
+        import onnxruntime as ort
+    except ImportError:
+        print("[warn] onnxruntime not installed; exported + structurally checked "
+              "ONNX but SKIPPED the numerical parity gate.")
+        print("       install with: pip install onnxruntime  (then re-run to verify)")
+        return float("nan")
+
+    sess = ort.InferenceSession(str(out_path), providers=["CPUExecutionProvider"])
+    gen = torch.Generator().manual_seed(PARITY_SEED)  # reproducible parity check
+    max_err = 0.0
+    with torch.no_grad():
+        for _ in range(PARITY_SAMPLES):
+            x = torch.randn(1, OBS_DIM, generator=gen)
+            ref = actor(x).numpy()
+            got = sess.run(["action"], {"obs": x.numpy().astype(np.float32)})[0]
+            max_err = max(max_err, float(np.abs(ref - got).max()))
+    if max_err > PARITY_TOL:
+        raise RuntimeError(f"onnx/torch mismatch {max_err:.2e} > {PARITY_TOL:.0e}")
+    return max_err
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -100,6 +168,10 @@ def main() -> int:
                     help="rsl_rl .pt with actor_state_dict (default: newest under logs/rsl_rl)")
     ap.add_argument("--out", default=str(DEFAULT_OUT),
                     help=f"output TorchScript path (default: {DEFAULT_OUT})")
+    ap.add_argument("--out_onnx", default=None,
+                    help="output ONNX path (default: <out> with .onnx suffix)")
+    ap.add_argument("--no_onnx", action="store_true",
+                    help="skip ONNX export (TorchScript only)")
     args = ap.parse_args()
 
     if args.checkpoint is None:
@@ -139,6 +211,23 @@ def main() -> int:
     print(f"     source : {ckpt_path}")
     print(f"     output : {out_path}")
     print(f"     io     : obs[{OBS_DIM}] -> action[{ACTION_DIM}], verify max|Δ|={max_err:.2e}")
+
+    if not args.no_onnx:
+        onnx_path = Path(args.out_onnx) if args.out_onnx else out_path.with_suffix(".onnx")
+        try:
+            onnx_err = export_onnx(actor, onnx_path)
+        except ImportError:
+            print("[warn] onnx not installed; skipped ONNX export. "
+                  "install with: pip install onnx onnxruntime", file=sys.stderr)
+        except Exception as exc:  # noqa: BLE001 — export/parity failure is fatal
+            print(f"[error] ONNX export failed: {exc}", file=sys.stderr)
+            return 1
+        else:
+            verdict = "skipped (no onnxruntime)" if onnx_err != onnx_err else f"{onnx_err:.2e}"
+            print(f"[ok] exported ONNX policy")
+            print(f"     output : {onnx_path}")
+            print(f"     verify : onnxruntime vs torch max|Δ|={verdict}")
+
     print(f"[hint] for rl_sar: copy to <rl_sar>/policy/mos2026_2/policy.pt "
           f"alongside config/mos2026_2.yaml")
     return 0

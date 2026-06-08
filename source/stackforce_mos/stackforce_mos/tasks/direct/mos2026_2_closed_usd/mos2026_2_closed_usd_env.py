@@ -323,6 +323,11 @@ class Mos20262ClosedUsdEnv(DirectRLEnv):
             ],
             dim=-1,
         )
+        # 观测高斯噪声（sim2real）：模拟传感器噪声，逼策略别依赖完美观测。
+        # 默认 cfg.obs_noise_std=0 即关闭，由 train.py --obs_noise_std 开启。
+        noise_std = float(getattr(self.cfg, "obs_noise_std", 0.0))
+        if noise_std > 0.0:
+            obs = obs + noise_std * torch.randn_like(obs)
         # Closed-chain physics can occasionally produce NaN/Inf in PhysX outputs.
         # Replace with 0 so rsl_rl's check_nan doesn't abort; the matching envs
         # are flagged for reset in `_get_dones`.

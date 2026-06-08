@@ -22,9 +22,11 @@
 
 > 目标：定位力矩/电流缺口的根因，先让站立稳定且有余量，再谈行走。
 
-- [ ] **量化需求 vs 实际**
+- [~] **量化需求 vs 实际**
   - [ ] 用 `play.py` 力矩统计 + 电机网页扭矩监控，记录站立/支撑相各关节**实测力矩与电流**
-  - [ ] 用整机质量(11.70 kg)和几何，估算各关节**理论静态保持力矩**，对比实测缺口
+  - [x] 用整机质量(11.70 kg)和几何，估算各关节**理论静态保持力矩**（2026-06-09，
+    `deploy/common/dynamics.py` + `doc/dynamics_gear_ratio_analysis.md`）：静立 4 腿
+    τ_knee≈2.2 / trot 2 腿≈4.5 / 动态蹬地 τ_hip≈12 / 深蹲(0.256)≈14 N·m。
   - [ ] 确认仿真里 `play_torque_stats.csv` 的 |max| / rms 是否超过电机额定/峰值力矩
 - [ ] **驱动链路排查（先软后硬）**
   - [ ] 检查驱动器**电流上限 / 力矩上限**参数是否被设低，逐步上调到电机额定
@@ -33,9 +35,13 @@
 - [ ] **控制侧补偿**
   - [ ] 站立加**重力前馈**（gravity compensation），减少纯 PD 的力矩负担
   - [ ] 复核站立目标姿态，避免大力臂的高耗能站姿
-- [ ] **选型评估（若软调无法满足）**
-  - [ ] 评估更高扭矩电机 / 更大减速比 / 更高母线电压的方案
-  - [ ] 在仿真里对齐真实电机的 actuator 力矩-速度曲线，确认 policy 输出在可行域内
+- [x] **选型评估**（2026-06-09，`doc/dynamics_gear_ratio_analysis.md`）：
+  - 结论：**减速比 6.33 已接近最优**（余量平衡最优 N\*=6.16；可行带 [3.56,10.66]；
+    力矩余量 1.78× ≈ 转速余量 1.68×）。**力矩不足的根因不是减速比**，而是
+    `effort_limit_sim=12` 卡在需求线零余量 + 真机驱动器电流上限/母线掉压。
+  - 行动项：(1) 仿真 effort_limit 放到 **16–18 N·m**（≤电机峰值 23.7）；
+    (2) 真机核查驱动器电流上限与大负载下母线电压；(3) 若主打中低速/抗扰可上调到 N≈8。
+  - [x] 在仿真里对齐真实电机的 actuator 力矩-速度曲线（T-N 曲线已建模并按 N 反射到关节）。
 - [ ] **闭环验证**：上调后重测站立维持 + 抗扰（侧推），确认有力矩余量再推进行走
 
 ### 📊 评估发现（2026-06-07，`eval.py` / `model_750.pt` 平地 1.0 m/s）
@@ -43,9 +49,13 @@
 > 工具：`scripts/rsl_rl/{eval.py, eval_report.py, eval_plot.py}`，结果见 `logs/.../eval/`。
 > 结论：策略**站立稳、速度跟踪近乎完美（0% 跌倒、vx 0.99/1.0）**，但**靠蹲低 + 小腿电机近乎满载**换来——这正是真机"力矩/电流不足"在仿真侧的同源表现。
 
-- [ ] **加力矩惩罚项**（根因）：当前 `reward_scales` 无任何 torque penalty，PPO 没有省力矩动机 → 学出贴上限硬走。
+- [~] **加力矩惩罚项**（根因）：当前 `reward_scales` 无任何 torque penalty，PPO 没有省力矩动机 → 学出贴上限硬走。
   - 仿真实测：`fl/rl/rr_shank` 有 **83~84%** 时间 ≥90% 上限（12 N·m），`rl_thigh` 66%，整体近上限占比 40%，CoT 高达 **4.5**、功率 515 W。
-  - 在 `custom_rewards.py` 加 `sum(τ²)` 惩罚并在 `reward_scales` 给小负权重，重训后用 `eval_plot.py` 对比近上限占比。
+  - ☑️ 已落地（2026-06-08）：`custom_rewards.py` 增加 `sum(τ²)` 项（取 `applied_torque`
+    的 12 受控关节，nan_to_num+clamp），`reward_scales["torque"]` 默认 **0.0（opt-in，
+    不改变现有训练）**。
+  - [ ] **待办**：把权重设为 −2e-4 起步重训，用 `eval_plot.py` 对比 `near_limit_frac`/
+    CoT 后微调（需 Isaac/GPU）。
 - [ ] **抬高站姿**：base 高度只有 **0.256**（目标 0.32，低 20%），蹲低直接抬高膝/踝力矩需求 → 调大 `base_height` 权重或核对目标可达性。
 - [ ] **修接触阈值**：`foot_contact_height_threshold=0.07` 太低，shank body 中心始终高于阈值 → **`foot_slip` 奖励训练时大概率从未生效**，步态/打滑指标也全退化。抬到 ~0.15（评估时可用 `eval.py --foot_contact_height 0.15` 验证）。
 - [ ] **速度-力矩扫描**：用 `eval.py --cmd_vx {0.3,0.6,1.0,1.3}` + `eval_plot.py` 看 `_compare.png`，确认力矩饱和随指令速度如何恶化，定出真机可行的速度上限。
@@ -60,10 +70,22 @@
 
 ### A. 仿真训练侧（最致命：训练设定本身不为真机服务）
 
-- [ ] **域随机化 / 扰动注入 = 0（最高优先级）**
+- [~] **域随机化 / 扰动注入 = 0（最高优先级）**
   - 全仓 `grep` 不到任何 `EventTermCfg / randomize_rigid_body / push / apply_external_force`，连骨架都没有。
   - 质量、质心、摩擦、关节 friction/damping、Kp/Kd 全是单一标称值；观测零噪声（`_get_observations` 直接 `cat` 真值）；无 push 外推、无 actuator 延迟/带宽。
-  - → 这种策略上真机基本必崩。需新增一套 `EventCfg`：随机 base/腿质量±质心、地面/足端摩擦、Kp/Kd、关节零位偏置、观测高斯噪声、周期性 push、控制延迟。
+  - ☑️ 已落地骨架（2026-06-08）：`env_cfg.py` 新增 `EventCfg`（startup 随机摩擦/base±质量/
+    腿±20%质量；reset 随机 Kp/Kd±20%/关节零位±0.05rad；interval 周期推搡 ±0.5 m/s）；
+    `_get_observations` 加观测高斯噪声（`obs_noise_std`）；`train.py` 加 `--domain_rand`
+    / `--obs_noise_std` 开关（**默认关闭，不污染 eval 的干净测量**）。
+  - [x] **冒烟验证通过（2026-06-08，env_isaaclab + RTX5090）**：`--num_envs 16
+    --max_iterations 5 --domain_rand --obs_noise_std 0.01` 跑通，`TRAINING_COMPLETED`。
+    EventManager 成功加载全部 6 term（startup: physics_material/add_base_mass/scale_leg_mass；
+    reset: actuator_gains/reset_joint_bias；interval: push_robot）——即所有 body/joint 正则
+    （`base`、`.*(thigh|shank).*` 匹配 `*_shank_link_a`、`.*`）都命中真实 USD，**无
+    SceneEntityCfg 报错**；各 mdp 事件函数签名与本机 Isaac Lab 2.3.2 **全部兼容**（无签名错）。
+    reward -0.52→0.24 正常上升，obs 噪声生效。下一步可放量正式训练对比鲁棒性。
+  - [ ] **未覆盖项**：actuator 延迟/带宽、控制延迟（`eval.py --action_delay` 已有评估侧，
+    训练侧仍缺），可后续作为 EventTerm 或 env 内缓冲实现。
 - [ ] **stock PPO 观测含特权信息 `root_lin_vel_b`（结构性不可部署）**
   - `observation_space=45` 前 3 维是机身线速度真值，真机**没有传感器直接给**（需 IMU+里程做状态估计）。
   - `state_space=0` → critic 也对称，无法用特权信息训练估计器。
@@ -79,8 +101,14 @@
 
 ### C. Sim2Real 中间层（几乎空白）
 
-- [ ] **无 policy 导出管线**：`play_mujoco.py` 靠 `torch.load` + 硬编码重建 `[256,256,128]` MLP，结构一变就静默错。
-  - → 加 **ONNX / TorchScript 导出 + 数值一致性校验**（onnx 输出 == torch 输出），真机推理也复用。
+- [x] **policy 导出管线**（`deploy/real/policy_export.py`）：从 rsl_rl checkpoint 重建
+  `[256,256,128]`-ELU actor（丢弃 std，部署确定性均值），导出 **TorchScript + ONNX** 双格式。
+  - ☑️ TorchScript（2026-06-08 前已有）：`jit.trace`+`freeze`，scripted vs eager `max|Δ|=0`。
+  - ☑️ ONNX（2026-06-08 新增）：`torch.onnx.export`（opset17，batch 动态轴）+ `onnx.checker`
+    结构校验 + **onnxruntime vs torch 数值一致性门**（256 随机样本播种，`max|Δ|=1.14e-05`
+    < 1e-4 容差；onnxruntime 缺失则降级为仅结构校验并提示）。产物 `deploy/real/policy/policy.{pt,onnx}`。
+  - 注：`play_mujoco.py` 仍走 `torch.load`+硬编码重建（旧路径），真机 `rl_deploy.py` 已用
+    `jit.load`。后续可让 `play_mujoco.py` 也复用导出产物，彻底消除「结构一变静默错」。
 - [ ] **MuJoCo 部署是「假」sim2real**：从 `data.qvel` 直接读机身速度喂 obs（继续用特权量），只验证了网络数值复现，没验证「真机拿不到的量怎么办」。
   - → 出一版「真机同款受限观测 + 估计器」的 MuJoCo 闭环。
 - [ ] **缺真机 obs 构建 / 单位对齐文档**：IMU 系→机体系旋转；关节方向/零位（注意编码器掉电丢整圈的隐患）；关节顺序映射（`joint_map.default.json` 未与 obs 的 12 维顺序对账）。
@@ -101,6 +129,42 @@
   - → 最终方案：重训时去掉 lin_vel 或接入 HIM 估计器
 - [ ] **首次上机流程**：先吊线 + `--no_rl` 验证 obs 读数（q_sim ≈ 0 在站姿），再切 RL 低速测试
 
+### E. 运动学（FK/IK）缺口（更新于 2026-06-08）
+
+> 全仓 `grep` 不到任何 `forward_kinematic / inverse_kinematic / jacobian / IK`：
+> **本工程此前完全没有运动学层**。纯 RL 端到端（policy 直接出 12 个关节目标）
+> 确实可以不用 FK/IK，但缺它会卡住三件事，且这正是「机器人运控」岗位的核心考点：
+>
+> 1. **Phase 2 传统控制 baseline 做不了**——手写 gait 需要在“足端轨迹空间”规划
+>    （抬腿/前摆/落地是足端的笛卡尔轨迹），再用 **IK** 转成关节目标。没有 IK
+>    只能在关节空间硬凑正弦，既不直观也无法对齐真机步幅/步高。
+> 2. **足端接触/打滑判定不准**——当前 `eval.py` 和 reward 用 *shank body 高度*
+>    近似触地（见 §力矩专项「修接触阈值」）。有 **FK** 就能算真实足端点高度/速度，
+>    把 `foot_slip`、`duty_factor`、触地判据建立在足端而非连杆中心上。
+> 3. **里程计 / 状态估计缺一块**——足端 FK + 接触相位是腿式里程计（leg odometry）
+>    估机身线速度的标准做法，正好对应 §C「线速度估计 lin_vel_source=zero」的降级问题。
+>
+> ⚠️ **闭链特殊性**：本机器人膝关节由平行四连杆驱动（MuJoCo 里 actuator 实际驱动
+> `*_shank_link`，真实 `*_shank` 经 `equality/connect` 闭环跟随）。所以「电机轴角 →
+> 等效膝关节角」存在一个**连杆传动关系**，FK/IK 工作在“等效 3-DOF 串联腿”
+> （hip 外摆 + thigh + 等效 knee）抽象上，电机↔等效膝角的映射需单独标定。
+
+- [x] **足端正运动学 FK**（2026-06-08，`deploy/common/kinematics.py`）：
+  `(q_ab, q_hip, q_knee) → 足端 (x,y,z)`（hip/base 系），numpy 向量化覆盖 4 条腿。
+  几何取自 `deploy/mujoco/assets/mos2026_2.xml`：L_thigh = 0.180 m；hip 外摆轴
+  FL/FR=−x、RL/RR=+x；俯仰轴 左腿=−y、右腿=+y。
+- [x] **足端逆运动学 IK**（同上）：`足端 (x,y,z) → (q_ab, q_hip, q_knee)`，解析解
+  （外摆 + 矢状面 2 连杆），含可达性 clamp 与 knee_sign 分支选择。
+- [x] **自洽验证**（`kinematics.py --selftest`）：足端 `FK(IK(p))` 往返 **1e-16**、
+  关节角往返 **3e-15**；零位 FK 与 XML 累计偏移精确一致（err=0）。
+- [ ] **对齐 MuJoCo（待装 mujoco）**：随机关节角下 FK 足端 vs `mj_forward` 的足端
+  body `xpos` 对比，确认与权威模型数值一致（当前 `.venv` 未装 mujoco，
+  无 foot site，需先在 XML 加 foot site 再比）。
+- [ ] **L_shank / 足端点标定**：XML 无 foot site，shank→足端长度暂按站立几何估计
+  （L1+L2 ≈ 0.34 ⇒ L_shank ≈ 0.16 m），需用 foot site 或真机实测标定。
+- [ ] **闭链传动标定**：标定「shank 电机轴角 ↔ 等效膝关节角」映射 + 约定角→sim/motor
+  的仿射映射（sign·q+offset），使 IK 解能直接下发到 `rl_deploy.py` / robot_web。
+
 ---
 
 ## 🧱 Phase 1：机械建模与仿真环境
@@ -119,10 +183,18 @@
 ## 🤖 Phase 2：基础控制（非 RL，先能动）
 
 > 关键：先用传统控制让它「站起来 / 走一步」，作为 RL 的 baseline。
+> 依赖 §E 的 FK/IK（足端轨迹 → 关节目标）。
 
+- [ ] **腿部运动学库**（§E）：FK/IK 解析解 + 自洽验证，4 腿向量化。
+  ☑️ 已落地 `deploy/common/kinematics.py`（含 `--selftest`），见下方进度。
 - [ ] 关节 PD 控制器：`τ = kp·(q*−q) + kd·(dq*−dq)`，每关节稳定无震荡
-- [ ] 手写简单 gait（抬腿 → 前摆 → 落地），能走几步
+- [x] **足端轨迹 gait**（2026-06-08，`deploy/common/gait.py`）：对角 trot，足端笛卡尔
+  空间规划——支撑相贴地直线 + 摆动相摆线（cycloid）抬腿，经 IK 转关节目标。
+  `--selftest` 全绿（足端往返 1e-16、膝角峰值 1.40<1.57 限位、对角相位正确）；
+  `--demo` 出 `outputs/gait_demo/` 关节曲线 + 足端轨迹图 + CSV。
+  - [ ] **待办**：把约定角经仿射映射下发到 MuJoCo/真机，实际走起来（需 sim/硬件）。
 - [ ] 状态观测打通：joint pos/vel、base orientation/vel
+- [ ] （可选）足端 FK + 接触相位做腿式里程计，给 §C 的线速度估计兜底
 
 ---
 

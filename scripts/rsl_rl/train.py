@@ -37,6 +37,11 @@ parser.add_argument(
         "num_envs — pair it with --num_envs if you also need fewer envs."
     ),
 )
+# --- 域随机化 / sim2real（默认关闭；开启后需先小 env 冒烟验证）---
+parser.add_argument("--domain_rand", action="store_true",
+                    help="启用域随机化事件（摩擦/质量/增益/关节零位偏置/周期推搡）。默认关闭。")
+parser.add_argument("--obs_noise_std", type=float, default=0.0,
+                    help="观测高斯噪声标准差（加在 45 维 obs 上模拟传感器噪声）。默认 0=关闭。")
 # --- SwanLab 实验跟踪（通过 TensorBoard 同步镜像 rsl_rl 的所有标量）---
 parser.add_argument("--no_swanlab", action="store_true",
                     help="关闭 SwanLab 实验跟踪（默认开启；未安装 swanlab 时自动跳过）。")
@@ -74,6 +79,7 @@ import stackforce_mos.tasks  # noqa: F401
 from stackforce_mos.tasks.direct.mos2026_2_closed_usd.mos2026_2_closed_usd_env_cfg import (
     CURRICULUM_TERRAIN_CFG,
     ROUGH_TERRAIN_CFG,
+    EventCfg,
 )
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -426,6 +432,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlBaseRun
         env_cfg.terrain.terrain_type = "plane"
         env_cfg.terrain.terrain_generator = None
         env_cfg.terrain_curriculum_enabled = False
+
+    # 域随机化 / 观测噪声（sim2real）。默认关闭；--domain_rand 时挂载 EventCfg，
+    # DirectRLEnv 检测到 cfg.events 非空会自动建 EventManager。eval.py 不走这里，
+    # 保持「干净测量」。
+    if args_cli.domain_rand:
+        env_cfg.events = EventCfg()
+        print("[INFO] 域随机化已启用（摩擦/质量/增益/关节零位/推搡）。"
+              "首次启用请先小 env 冒烟，并核对 USD body/joint 名是否匹配 EventCfg 正则。")
+    else:
+        env_cfg.events = None
+    env_cfg.obs_noise_std = args_cli.obs_noise_std
+    if args_cli.obs_noise_std > 0.0:
+        print(f"[INFO] 观测高斯噪声已启用：std={args_cli.obs_noise_std}")
 
     log_root_path = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name))
     log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")

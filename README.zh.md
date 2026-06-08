@@ -34,6 +34,7 @@
   - [🎯 训练脚本参数](#-训练脚本参数)
     - [🗺️ `--terrain` 选项](#️---terrain-选项)
     - [💡 完整示例](#-完整示例)
+  - [📈 SwanLab 实验跟踪](#-swanlab-实验跟踪)
   - [🔍 可视化调试关节驱动](#-可视化调试关节驱动)
   - [🛠️ 推荐环境 \& 安装](#️-推荐环境--安装)
     - [已验证版本组合](#已验证版本组合)
@@ -159,6 +160,63 @@ python scripts/rsl_rl/train.py \
 > [!NOTE]
 > 📂 日志目录：`logs/rsl_rl/<experiment_name>/<时间戳>[_<run_name>]/`  
 > 💾 Checkpoint 落在 `model_final.pt` 与 `model_*.pt`
+
+---
+
+## 📈 SwanLab 实验跟踪
+
+训练默认开启 [SwanLab](https://swanlab.cn)，把 rsl_rl 写进 TensorBoard 的所有标量（reward、loss、各项奖励分量等）**自动镜像**一份到 SwanLab，方便跨实验对比。`scripts/rsl_rl/train.py`（PPO）和 `him/train.py`（HIM）都支持，参数一致。
+
+> [!IMPORTANT]
+> 镜像通过 patch TensorBoard 的 `SummaryWriter`，所以 SwanLab 在建 runner 之前启动即可，**无需改动任何训练/奖励代码**。未安装 swanlab 时自动跳过，初始化失败也只回退到纯 TensorBoard，不影响训练。
+
+### ⚙️ 相关参数
+
+| 参数 | 默认值 | 说明 |
+|:---|:---:|:---|
+| `--no_swanlab` | 关闭开关 | 加上即彻底关闭 SwanLab（默认开启） |
+| `--swanlab_project` | `stackforce-mos` | 项目名。PPO 与 HIM 用同一项目便于对比 |
+| `--swanlab_mode` | `cloud` | 运行模式：`cloud` 上传云端 / `local` 本地看板 / `offline` 离线缓存 / `disabled` 关闭 |
+
+### 🚀 首次使用
+
+```bash
+# 1️⃣ 安装（注意 swanlab 会顶坏 Isaac 的 wrapt/sentry-sdk 版本，装完务必降回）
+pip install swanlab
+pip install "wrapt==1.16.0" "sentry-sdk==1.43.0"
+
+# 2️⃣ cloud 模式首次需登录一次（在 https://swanlab.cn 账户设置里拿 API Key）
+swanlab login
+
+# 3️⃣ 正常训练即可，标量会自动上传到云端 project=stackforce-mos
+python scripts/rsl_rl/train.py \
+    --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
+    --headless --num_envs 4096 --run_name baseline_flat
+```
+
+### 💡 常见用法
+
+```bash
+# 不想联网 / 服务器无外网：本地看板模式
+python scripts/rsl_rl/train.py ... --swanlab_mode local
+
+# 完全关闭 SwanLab（只留 TensorBoard）
+python scripts/rsl_rl/train.py ... --no_swanlab
+
+# 自定义项目名
+python scripts/rsl_rl/train.py ... --swanlab_project my-exp
+```
+
+> [!TIP]
+> 已经跑完、只有 TensorBoard 日志、想离线转成 SwanLab 本地看板看？用 `tools/swanlab_convert_local.py`（绕开了 SwanLab 0.8.0 本地转换的登录 bug）：
+> ```bash
+> # 用装了 swanlab 的 Isaac venv 跑转换
+> /home/maybe/code/rl/env_isaaclab/bin/python3 tools/swanlab_convert_local.py \
+>     logs/rsl_rl/<experiment>/<时间戳> \
+>     --out ./swanlog_local --project stackforce-mos
+> # 再本地起看板
+> /home/maybe/code/rl/env_isaaclab/bin/swanlab watch ./swanlog_local
+> ```
 
 ---
 

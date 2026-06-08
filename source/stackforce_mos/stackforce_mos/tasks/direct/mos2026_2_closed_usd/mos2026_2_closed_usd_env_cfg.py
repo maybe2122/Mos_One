@@ -1,10 +1,13 @@
 from pathlib import Path
 
+import isaaclab.envs.mdp as mdp
 import isaaclab.sim as sim_utils
 import isaaclab.terrains as terrain_gen
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
 from isaaclab.envs import DirectRLEnvCfg, ViewerCfg
+from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import SceneEntityCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import PhysxCfg, SimulationCfg
 from isaaclab.terrains import TerrainGeneratorCfg, TerrainImporterCfg
@@ -92,8 +95,91 @@ USD_PATH = ASSET_DIR / "mos2026_2.usd"
 
 
 @configclass
+class EventCfg:
+    """域随机化 / 扰动注入（对应 todo.md §A「域随机化=0」最高优先级缺口）。
+
+    sim2real 的核心：训练时随机化物理参数 + 注入扰动，逼策略学出鲁棒控制，否则
+    单一标称值训出的策略上真机基本必崩。本配置默认**不挂载**到 env（见 cfg.events
+    默认 None），由 `train.py --domain_rand` 显式开启；eval.py 保持关闭以保证
+    「干净测量」。
+
+    ⚠️ 需在 Isaac 机器上 smoke test 验证（本仓库 .venv 无 torch/Isaac，无法运行）：
+      1. body_names="base" / 正则需对齐**真实 USD 的 body/joint 名**（可能与 MuJoCo
+         XML 的 base/FL/fl_thigh… 不同）；先用 env._robot.body_names 打印核对。
+      2. 各 mdp 事件函数签名以本机 Isaac Lab 2.3.2 为准；如有差异按报错微调。
+    建议先 `--num_envs 16 --max_iterations 20 --domain_rand` 冒烟，再放量。
+    """
+
+    # --- startup：一次性随机化物理参数 ---
+    physics_material = EventTerm(
+        func=mdp.randomize_rigid_body_material,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
+            "static_friction_range": (0.6, 1.4),
+            "dynamic_friction_range": (0.4, 1.0),
+            "restitution_range": (0.0, 0.1),
+            "num_buckets": 64,
+        },
+    )
+    add_base_mass = EventTerm(
+        func=mdp.randomize_rigid_body_mass,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names="base"),
+            "mass_distribution_params": (-0.5, 1.0),  # ±kg，模拟负载/电池差异
+            "operation": "add",
+        },
+    )
+    scale_leg_mass = EventTerm(
+        func=mdp.randomize_rigid_body_mass,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=".*(thigh|shank).*"),
+            "mass_distribution_params": (0.8, 1.2),  # ±20% 腿质量
+            "operation": "scale",
+        },
+    )
+
+    # --- reset：每回合随机化执行器增益 + 关节零位偏置 ---
+    actuator_gains = EventTerm(
+        func=mdp.randomize_actuator_gains,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
+            "stiffness_distribution_params": (0.8, 1.2),  # ±20% Kp
+            "damping_distribution_params": (0.8, 1.2),    # ±20% Kd
+            "operation": "scale",
+        },
+    )
+    reset_joint_bias = EventTerm(
+        func=mdp.reset_joints_by_offset,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "position_range": (-0.05, 0.05),  # ~±3°，模拟标定误差/编码器零点漂移
+            "velocity_range": (0.0, 0.0),
+        },
+    )
+
+    # --- interval：周期性推搡（抗扰）---
+    push_robot = EventTerm(
+        func=mdp.push_by_setting_velocity,
+        mode="interval",
+        interval_range_s=(4.0, 8.0),
+        params={"velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5)}},
+    )
+
+
+@configclass
 class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
     episode_length_s = 20.0
+    # 域随机化事件。默认 None=关闭（不改变现有训练/eval）。train.py --domain_rand
+    # 会把它设为 EventCfg() 开启；DirectRLEnv 在 cfg.events 非空时自动建 EventManager。
+    events: EventCfg | None = None
+    # 观测高斯噪声标准差（加在 45 维 obs 上，模拟传感器噪声）。默认 0=关闭。
+    # 与 EventCfg 配套，由 train.py --obs_noise_std 设置；eval.py 用 --obs_noise 单独控制。
+    obs_noise_std: float = 0.0
     decimation = 4
     # 每个关节相对于默认姿态的偏转系数（弧度）。
     # joint_target = default + action_scale * clamp(action, ±action_clip)。
@@ -396,6 +482,11 @@ class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
         # 用 -1.0 比 gait_symmetry 还重，因为这是用户明确点名要"增大"的项：
         # 它直接看脚的运动相位，比关节空间对称项更难被"用别的关节代偿"绕过。
         "anti_bound": -1.0,
+        # 力矩惩罚 sum(τ²)（custom_rewards.py 计算）。默认 0.0 = 关闭，不改变现有训练。
+        # 评估显示策略「贴力矩上限硬走」（shank 83~84% 时间 ≥90% 上限）是真机力矩/
+        # 电流不足在仿真侧的同源表现。开启时建议起步 -2e-4，逐步上调并用 eval_plot.py
+        # 对比 near_limit_frac / CoT；过大会让策略不敢发力、走不动。
+        "torque": 0.0,
         "custom_reward": 0.0,
     }
     # 速度跟踪奖励里 exp() 的带宽。带宽越大，部分达成（比如指令 1.0 m/s
