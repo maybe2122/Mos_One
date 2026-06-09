@@ -411,6 +411,18 @@ python scripts/rsl_rl/eval_report.py \
 > 💡 **减速比结论**：现用 6.33 已接近最优（余量平衡最优 N\*=6.16）；真机「力矩/电流不足」
 > 根因不是减速比，而是 `effort_limit_sim` 卡需求线 + 驱动器电流上限/母线掉压。
 
+> 🪑 **MuJoCo 站起来力矩分析**（蹲→站插值，逐关节力矩/电机负载出图 + CSV；可导
+> **慢放视频**（右侧叠加实时力矩条）、**SwanLab 实时查看**每关节力矩）：
+> 见 **[📄 deploy/mujoco/README.md](./deploy/mujoco/README.md)**。
+> ```bash
+> # 慢放 10× 看站起来 + 力矩条
+> MUJOCO_GL=glx ../env_isaaclab/bin/python deploy/mujoco/standup_torque.py \
+>     --video outputs/standup_torque/standup_slow10x.mp4 --slowmo 10
+> # SwanLab 本地看板实时看力矩：先 swanlab watch，再 --swanlab --realtime
+> ../env_isaaclab/bin/python -m swanlab watch swanlog_local        # 浏览器开 127.0.0.1:5092
+> ../env_isaaclab/bin/python deploy/mujoco/standup_torque.py --swanlab --realtime
+> ```
+
 ---
 
 ## 📦 闭链 USD 注意事项
