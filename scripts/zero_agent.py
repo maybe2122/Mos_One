@@ -2,7 +2,7 @@ import argparse
 
 from isaaclab.app import AppLauncher
 
-parser = argparse.ArgumentParser(description="Zero agent for StackForce closed-chain USD Isaac Lab environments.")
+parser = argparse.ArgumentParser(description="Zero agent for MosOne closed-chain USD Isaac Lab environments.")
 parser.add_argument("--disable_fabric", action="store_true", default=False)
 parser.add_argument("--num_envs", type=int, default=None)
 parser.add_argument("--task", type=str, default=None)
@@ -22,7 +22,7 @@ import torch
 
 from isaaclab_tasks.utils import parse_env_cfg
 
-import stackforce_mos.tasks  # noqa: F401
+import mos_one.tasks  # noqa: F401
 
 
 

@@ -43,8 +43,8 @@ The actor input is 6 stacked `one_step_obs` frames (newest-first), maintained in
 
 ## Run
 Use the shared Isaac Lab env (`env_isaaclab`, the one with isaaclab + torch).
-`stackforce_mos` does not need to be pip-installed — `train.py` adds
-`source/stackforce_mos` to `sys.path`.
+`mos_one` does not need to be pip-installed — `train.py` adds
+`source/mos_one` to `sys.path`.
 
 ```bash
 # GUI (few envs)

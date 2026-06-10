@@ -36,8 +36,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 ASSET_ROOT = (
     REPO_ROOT
     / "source"
-    / "stackforce_mos"
-    / "stackforce_mos"
+    / "mos_one"
+    / "mos_one"
     / "assets"
     / "robots"
 )

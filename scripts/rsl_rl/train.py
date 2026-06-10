@@ -7,9 +7,9 @@ from datetime import datetime
 
 from isaaclab.app import AppLauncher
 
-parser = argparse.ArgumentParser(description="Train a StackForce closed-chain USD task with RSL-RL.")
+parser = argparse.ArgumentParser(description="Train a MosOne closed-chain USD task with RSL-RL.")
 parser.add_argument("--num_envs", type=int, default=16000)
-parser.add_argument("--task", type=str, default="StackForce-Mos20262ClosedUsd-ClosedUsd-v0")
+parser.add_argument("--task", type=str, default="MosOne-Mos20262ClosedUsd-ClosedUsd-v0")
 parser.add_argument("--agent", type=str, default="rsl_rl_cfg_entry_point")
 parser.add_argument("--seed", type=int, default=None)
 parser.add_argument("--max_iterations", type=int, default=5000)
@@ -45,7 +45,7 @@ parser.add_argument("--obs_noise_std", type=float, default=0.0,
 # --- SwanLab 实验跟踪（通过 TensorBoard 同步镜像 rsl_rl 的所有标量）---
 parser.add_argument("--no_swanlab", action="store_true",
                     help="关闭 SwanLab 实验跟踪（默认开启；未安装 swanlab 时自动跳过）。")
-parser.add_argument("--swanlab_project", type=str, default="stackforce-mos",
+parser.add_argument("--swanlab_project", type=str, default="mos_one-mos",
                     help="SwanLab 项目名。")
 parser.add_argument("--swanlab_mode", type=str, default="cloud",
                     choices=["cloud", "local", "offline", "disabled"],
@@ -75,8 +75,8 @@ from isaaclab.utils.io import dump_yaml
 from isaaclab_rl.rsl_rl import RslRlBaseRunnerCfg
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
-import stackforce_mos.tasks  # noqa: F401
-from stackforce_mos.tasks.direct.mos2026_2_closed_usd.mos2026_2_closed_usd_env_cfg import (
+import mos_one.tasks  # noqa: F401
+from mos_one.tasks.direct.mos2026_2_closed_usd.mos2026_2_closed_usd_env_cfg import (
     CURRICULUM_TERRAIN_CFG,
     ROUGH_TERRAIN_CFG,
     EventCfg,
@@ -256,7 +256,7 @@ def to_compatible_rsl_rl_cfg(agent_cfg):
     runner_cfg.setdefault("max_iterations", getattr(agent_cfg, "max_iterations", 1500))
     runner_cfg.setdefault("save_interval", getattr(agent_cfg, "save_interval", 50))
     runner_cfg.setdefault("obs_groups", {"policy": ["policy"], "critic": ["policy"]})
-    runner_cfg.setdefault("experiment_name", getattr(agent_cfg, "experiment_name", "stackforce"))
+    runner_cfg.setdefault("experiment_name", getattr(agent_cfg, "experiment_name", "mos_one"))
     runner_cfg.setdefault("run_name", getattr(agent_cfg, "run_name", ""))
     runner_cfg.setdefault("resume", getattr(agent_cfg, "resume", False))
     runner_cfg.setdefault("load_run", getattr(agent_cfg, "load_run", ".*"))
@@ -329,7 +329,7 @@ def _scale_physx_gpu_caps(env_cfg, max_gpu_mem_gb: float) -> None:
         scaled[field] = (current, new_value)
     if scaled:
         print(
-            f"[StackForce] Scaling PhysX GPU caps for {max_gpu_mem_gb:.1f} GB budget "
+            f"[MosOne] Scaling PhysX GPU caps for {max_gpu_mem_gb:.1f} GB budget "
             f"(scale={scale:.3f}):",
             flush=True,
         )

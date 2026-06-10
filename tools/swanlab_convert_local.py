@@ -18,7 +18,7 @@ Run with the Isaac Sim venv that has swanlab installed:
 
     /home/maybe/code/rl/env_isaaclab/bin/python3 tools/swanlab_convert_local.py \
         logs/rsl_rl/mos2026_2_closed_usd/2026-05-17_00-44-23 \
-        --out ./swanlog_local --project stackforce-mos
+        --out ./swanlog_local --project mos_one-mos
 
 Then serve the result in the browser:
 
@@ -35,7 +35,7 @@ def main() -> int:
     parser.add_argument("tb_log_dir", help="Directory containing TensorBoard events.out.tfevents.* files.")
     parser.add_argument("--out", default="./swanlog_local",
                         help="Output directory for the local SwanLab log (default: ./swanlog_local).")
-    parser.add_argument("--project", default="stackforce-mos", help="SwanLab project name.")
+    parser.add_argument("--project", default="mos_one-mos", help="SwanLab project name.")
     parser.add_argument("--types", default="scalar",
                         help="Comma-separated TB data types to convert (scalar,image,audio,text).")
     args = parser.parse_args()

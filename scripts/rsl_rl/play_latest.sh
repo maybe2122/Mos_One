@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-TASK="${TASK:-StackForce-Mos20262ClosedUsd-ClosedUsd-v0}"
+TASK="${TASK:-MosOne-Mos20262ClosedUsd-ClosedUsd-v0}"
 LOGS_DIR="${LOGS_DIR:-logs}"
 
 # Resolve repo root so the script works from any cwd.

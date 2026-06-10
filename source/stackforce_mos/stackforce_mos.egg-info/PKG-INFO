@@ -1,9 +1,0 @@
-Metadata-Version: 2.4
-Name: stackforce_mos
-Version: 0.1.0
-Summary: StackForce SimReady closed-chain USD Isaac Lab export for StackForce-Mos20262ClosedUsd-ClosedUsd-v0
-Requires-Python: >=3.10
-Requires-Dist: psutil
-Dynamic: requires-dist
-Dynamic: requires-python
-Dynamic: summary

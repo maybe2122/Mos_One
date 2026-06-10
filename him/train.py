@@ -15,10 +15,10 @@ from datetime import datetime
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(_THIS_DIR)
-# make `him_rl` + sibling modules and the (possibly un-installed) stackforce_mos
+# make `him_rl` + sibling modules and the (possibly un-installed) mos_one
 # package importable without relying on a pip install.
 sys.path.insert(0, _THIS_DIR)
-sys.path.insert(0, os.path.join(_REPO_ROOT, "source", "stackforce_mos"))
+sys.path.insert(0, os.path.join(_REPO_ROOT, "source", "mos_one"))
 
 from isaaclab.app import AppLauncher  # noqa: E402
 
@@ -39,7 +39,7 @@ parser.add_argument(
 # --- SwanLab 实验跟踪（镜像 HIM runner 的 TensorBoard 标量）---
 parser.add_argument("--no_swanlab", action="store_true",
                     help="关闭 SwanLab 实验跟踪（默认开启；未安装 swanlab 时自动跳过）。")
-parser.add_argument("--swanlab_project", type=str, default="stackforce-mos",
+parser.add_argument("--swanlab_project", type=str, default="mos_one-mos",
                     help="SwanLab 项目名（与 PPO 训练同项目便于对比）。")
 parser.add_argument("--swanlab_mode", type=str, default="cloud",
                     choices=["cloud", "local", "offline", "disabled"],
@@ -54,7 +54,7 @@ simulation_app = app_launcher.app
 # ---- imports that require the running app (carb/isaaclab) ----
 import torch  # noqa: E402
 
-from stackforce_mos.tasks.direct.mos2026_2_closed_usd.mos2026_2_closed_usd_env_cfg import (  # noqa: E402
+from mos_one.tasks.direct.mos2026_2_closed_usd.mos2026_2_closed_usd_env_cfg import (  # noqa: E402
     CURRICULUM_TERRAIN_CFG,
     ROUGH_TERRAIN_CFG,
 )

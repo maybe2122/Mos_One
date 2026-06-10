@@ -1,18 +1,18 @@
 import argparse
 
-parser = argparse.ArgumentParser(description="List StackForce closed-chain USD Isaac Lab environments.")
+parser = argparse.ArgumentParser(description="List MosOne closed-chain USD Isaac Lab environments.")
 parser.add_argument("--keyword", type=str, default=None, help="Keyword to filter environments.")
 args_cli = parser.parse_args()
 
 import gymnasium as gym
 from prettytable import PrettyTable
 
-import stackforce_mos.tasks  # noqa: F401
+import mos_one.tasks  # noqa: F401
 
 
 def main():
     table = PrettyTable(["S. No.", "Task Name", "Entry Point", "Config"])
-    table.title = "Available StackForce Closed-Chain USD Environments"
+    table.title = "Available MosOne Closed-Chain USD Environments"
     table.align["Task Name"] = "l"
     table.align["Entry Point"] = "l"
     table.align["Config"] = "l"

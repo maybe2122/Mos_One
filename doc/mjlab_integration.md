@@ -1,4 +1,4 @@
-# 将 mjlab 集成进本项目（stackforce_mos）
+# 将 mjlab 集成进本项目（mos_one）
 
 > 目标读者：本项目维护者。
 > 适用栈：现有 **Isaac Sim 5.1.0 + Isaac Lab v2.3.2 + rsl_rl**（Python 3.11 / Torch 2.7 cu128，USD/闭链机器人）。
@@ -161,7 +161,7 @@ URDF 是树结构，表达不了并联膝的环。转出 MJCF 后，按下述方
 ## 7. 目录组织建议
 
 ```
-stackforce_mos/
+mos_one/
 ├─ third_party/
 │  ├─ rl_sar/              # 已有：部署 / sim2real
 │  └─ mjlab/               # 新增 submodule

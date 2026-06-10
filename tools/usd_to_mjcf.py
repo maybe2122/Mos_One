@@ -40,8 +40,8 @@ from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics
 REPO_ROOT = Path(__file__).resolve().parents[1]
 USD_DIR = (
     REPO_ROOT
-    / "source/stackforce_mos"
-    / "stackforce_mos"
+    / "source/mos_one"
+    / "mos_one"
     / "assets/robots/mos2026_2_closed_usd/usd"
 )
 MAIN_USD = USD_DIR / "mos2026_2.usd"

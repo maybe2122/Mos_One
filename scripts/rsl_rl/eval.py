@@ -42,9 +42,9 @@ import sys
 
 from isaaclab.app import AppLauncher
 
-parser = argparse.ArgumentParser(description="Evaluate a trained StackForce closed-chain USD policy.")
+parser = argparse.ArgumentParser(description="Evaluate a trained MosOne closed-chain USD policy.")
 parser.add_argument("--num_envs", type=int, default=64, help="并行评估环境数。越多统计越稳，受显存限制。")
-parser.add_argument("--task", type=str, default="StackForce-Mos20262ClosedUsd-ClosedUsd-v0")
+parser.add_argument("--task", type=str, default="MosOne-Mos20262ClosedUsd-ClosedUsd-v0")
 parser.add_argument("--agent", type=str, default="rsl_rl_cfg_entry_point")
 parser.add_argument("--checkpoint", type=str, default="model_.*.pt")
 parser.add_argument("--load_run", type=str, default=".*")
@@ -94,8 +94,8 @@ from isaaclab_rl.rsl_rl import RslRlBaseRunnerCfg
 from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
-import stackforce_mos.tasks  # noqa: F401
-from stackforce_mos.tasks.direct.mos2026_2_closed_usd.mos2026_2_closed_usd_env_cfg import (
+import mos_one.tasks  # noqa: F401
+from mos_one.tasks.direct.mos2026_2_closed_usd.mos2026_2_closed_usd_env_cfg import (
     CURRICULUM_TERRAIN_CFG,
     ROUGH_TERRAIN_CFG,
 )
@@ -247,7 +247,7 @@ def to_compatible_rsl_rl_cfg(agent_cfg):
     runner_cfg.setdefault("max_iterations", getattr(agent_cfg, "max_iterations", 1500))
     runner_cfg.setdefault("save_interval", getattr(agent_cfg, "save_interval", 50))
     runner_cfg.setdefault("obs_groups", {"policy": ["policy"], "critic": ["policy"]})
-    runner_cfg.setdefault("experiment_name", getattr(agent_cfg, "experiment_name", "stackforce"))
+    runner_cfg.setdefault("experiment_name", getattr(agent_cfg, "experiment_name", "mos_one"))
     runner_cfg.setdefault("run_name", getattr(agent_cfg, "run_name", ""))
     runner_cfg.setdefault("resume", getattr(agent_cfg, "resume", False))
     runner_cfg.setdefault("load_run", getattr(agent_cfg, "load_run", ".*"))

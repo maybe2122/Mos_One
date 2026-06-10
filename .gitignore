@@ -13,3 +13,6 @@ MJDATA.TXT
 MJMODEL.TXT
 *.mjb
 /mjmodel.xml
+
+# Python 打包产物
+*.egg-info/

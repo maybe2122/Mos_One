@@ -14,7 +14,7 @@
 
 from isaaclab.utils import configclass
 
-from stackforce_mos.tasks.direct.mos2026_2_closed_usd.mos2026_2_closed_usd_env_cfg import (
+from mos_one.tasks.direct.mos2026_2_closed_usd.mos2026_2_closed_usd_env_cfg import (
     Mos20262ClosedUsdEnvCfg,
 )
 

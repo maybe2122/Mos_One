@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🤖 StackForce SimReady
+# 🤖 Mos-One SimReady
 
 ### 闭链 USD · Isaac Lab / Isaac Sim 导出工程
 
@@ -27,7 +27,7 @@
 
 ## 📑 目录
 
-- [🤖 StackForce SimReady](#-stackforce-simready)
+- [🤖 Mos-One SimReady](#-mos-one-simready)
     - [闭链 USD · Isaac Lab / Isaac Sim 导出工程](#闭链-usd--isaac-lab--isaac-sim-导出工程)
   - [📑 目录](#-目录)
   - [⚡ 一分钟上手](#-一分钟上手)
@@ -35,6 +35,7 @@
     - [🗺️ `--terrain` 选项](#️---terrain-选项)
     - [💡 完整示例](#-完整示例)
   - [📈 SwanLab 实验跟踪](#-swanlab-实验跟踪)
+  - [🗂️ 版本记录 \& 实验台账](#️-版本记录--实验台账)
   - [🔍 可视化调试关节驱动](#-可视化调试关节驱动)
   - [🛠️ 推荐环境 \& 安装](#️-推荐环境--安装)
     - [已验证版本组合](#已验证版本组合)
@@ -61,19 +62,19 @@ conda activate <你自己的IsaacLab环境名称>
 
 # 2️⃣ 安装导出工程
 cd <exported_project>
-uv pip install -e source/stackforce_mos
+uv pip install -e source/mos_one
 
 # 3️⃣ 检查环境注册情况
 python scripts/list_envs.py
 python scripts/inspect_usd.py --headless
 
 # 4️⃣ 用 zero / random agent 跑一遍，确认 USD 加载正常
-python scripts/zero_agent.py   --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 --headless --num_envs 4 --num_steps 200
-python scripts/random_agent.py --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 --headless --num_envs 4 --num_steps 200
+python scripts/zero_agent.py   --task MosOne-Mos20262ClosedUsd-ClosedUsd-v0 --headless --num_envs 4 --num_steps 200
+python scripts/random_agent.py --task MosOne-Mos20262ClosedUsd-ClosedUsd-v0 --headless --num_envs 4 --num_steps 200
 
 # 5️⃣ 开始 PPO 训练（先跑 20 个 iteration 做冒烟验证）
 python scripts/rsl_rl/train.py \
-    --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
+    --task MosOne-Mos20262ClosedUsd-ClosedUsd-v0 \
     --headless --max_iterations 3000 \
     --terrain curriculum \
     --max_gpu_mem 10
@@ -92,7 +93,7 @@ python scripts/rsl_rl/train.py \
 
 | 参数 | 类型 | 默认值 | 说明 |
 |:---|:---:|:---:|:---|
-| `--task` | `str` | **必填** | Gym 任务 ID，本工程为 `StackForce-Mos20262ClosedUsd-ClosedUsd-v0` |
+| `--task` | `str` | **必填** | Gym 任务 ID，本工程为 `MosOne-Mos20262ClosedUsd-ClosedUsd-v0` |
 | `--num_envs` | `int` | 任务默认 | 并行环境数。显存吃紧先用 `16`，稳定后 `4096` 提速 |
 | `--max_iterations` | `int` | `1500` | PPO 学习迭代次数，冒烟可用 `20` |
 | `--seed` | `int` | 任务默认 | 随机种子 |
@@ -131,29 +132,29 @@ python scripts/rsl_rl/train.py \
 ```bash
 # 1️⃣ 冒烟跑 20 个 iteration，小 env 验证管线
 python scripts/rsl_rl/train.py \
-    --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
+    --task MosOne-Mos20262ClosedUsd-ClosedUsd-v0 \
     --headless --num_envs 16 --max_iterations 20
 
 # 2️⃣ 正式训练，带 run_name 方便日志对比
 python scripts/rsl_rl/train.py \
-    --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
+    --task MosOne-Mos20262ClosedUsd-ClosedUsd-v0 \
     --headless --num_envs 4096 --max_iterations 1500 \
     --seed 42 --run_name baseline_flat
 
 # 3️⃣ 课程学习地形上训练
 python scripts/rsl_rl/train.py \
-    --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
+    --task MosOne-Mos20262ClosedUsd-ClosedUsd-v0 \
     --headless --num_envs 4096 --terrain curriculum \
     --run_name curriculum_v1
 
 # 4️⃣ 在 16GB / 8GB 显卡上训练：同时缩 PhysX 容量和 env 数
 python scripts/rsl_rl/train.py \
-    --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
+    --task MosOne-Mos20262ClosedUsd-ClosedUsd-v0 \
     --headless --num_envs 2048 --max_gpu_mem 16 \
     --max_iterations 1500 --run_name gpu16
 
 python scripts/rsl_rl/train.py \
-    --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
+    --task MosOne-Mos20262ClosedUsd-ClosedUsd-v0 \
     --headless --num_envs 1024 --max_gpu_mem 8 \
     --max_iterations 1500 --run_name gpu8
 ```
@@ -176,7 +177,7 @@ python scripts/rsl_rl/train.py \
 | 参数 | 默认值 | 说明 |
 |:---|:---:|:---|
 | `--no_swanlab` | 关闭开关 | 加上即彻底关闭 SwanLab（默认开启） |
-| `--swanlab_project` | `stackforce-mos` | 项目名。PPO 与 HIM 用同一项目便于对比 |
+| `--swanlab_project` | `mos_one-mos` | 项目名。PPO 与 HIM 用同一项目便于对比 |
 | `--swanlab_mode` | `cloud` | 运行模式：`cloud` 上传云端 / `local` 本地看板 / `offline` 离线缓存 / `disabled` 关闭 |
 
 ### 🚀 首次使用
@@ -189,9 +190,9 @@ pip install "wrapt==1.16.0" "sentry-sdk==1.43.0"
 # 2️⃣ cloud 模式首次需登录一次（在 https://swanlab.cn 账户设置里拿 API Key）
 swanlab login
 
-# 3️⃣ 正常训练即可，标量会自动上传到云端 project=stackforce-mos
+# 3️⃣ 正常训练即可，标量会自动上传到云端 project=mos_one-mos
 python scripts/rsl_rl/train.py \
-    --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
+    --task MosOne-Mos20262ClosedUsd-ClosedUsd-v0 \
     --headless --num_envs 4096 --run_name baseline_flat
 ```
 
@@ -214,12 +215,32 @@ python scripts/rsl_rl/train.py ... --swanlab_project my-exp
 > # 用装了 swanlab 的 Isaac venv 跑转换
 > /home/maybe/code/rl/env_isaaclab/bin/python3 tools/swanlab_convert_local.py \
 >     logs/rsl_rl/<experiment>/<时间戳> \
->     --out ./swanlog_local --project stackforce-mos
+>     --out ./swanlog_local --project mos_one-mos
 > # 再本地起看板
 > /home/maybe/code/rl/env_isaaclab/bin/swanlab watch ./swanlog_local
 > ```
 
 ---
+
+## 🗂️ 版本记录 & 实验台账
+
+仓库用**三层文档 + git tag** 记录演进，各回答一个不同问题，互不重复（SwanLab 管指标曲线，台账管叙事决策）：
+
+| 层 | 文件 | 回答 |
+|---|---|---|
+| 前瞻计划 | [`todo.md`](todo.md) | 接下来做什么 |
+| 工程里程碑 | [`CHANGELOG.md`](CHANGELOG.md) + git tag | 代码现在能做什么了 |
+| 实验迭代台账 | [`doc/experiments/EXPERIMENTS.md`](doc/experiments/EXPERIMENTS.md) | 我试了什么、为什么、学到什么 |
+
+训练跑完，一行命令把这次迭代记进台账（自动拉 git/run/seed，曲线链接回 SwanLab）：
+
+```bash
+python3 tools/log_run.py --run-dir logs/rsl_rl/<exp>/<ts>_<run_name> \
+  --title "..." --hypothesis "..." --changes "..." \
+  --conclusion "..." --swanlab-url <run链接>   # 先 --dry-run 预览
+```
+
+完整说明（三层闭环、tag 规范、补打历史 tag 的命令）见 **[`doc/version_tracking.md`](doc/version_tracking.md)**。
 
 ## 🔍 可视化调试关节驱动
 
@@ -229,7 +250,7 @@ python scripts/rsl_rl/train.py ... --swanlab_project my-exp
 
 ```bash
 python scripts/random_agent.py \
-    --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
+    --task MosOne-Mos20262ClosedUsd-ClosedUsd-v0 \
     --num_envs 1 --num_steps 0 \
     --motion_mode gait --action_gain 0.1
 ```
@@ -252,14 +273,14 @@ python scripts/random_agent.py \
 ### 🚀 一键安装
 
 ```bash
-chmod +x scripts/setup_stackforce_isaac_lab_sim_env.sh
-./scripts/setup_stackforce_isaac_lab_sim_env.sh
+chmod +x scripts/setup_mos_one_isaac_lab_sim_env.sh
+./scripts/setup_mos_one_isaac_lab_sim_env.sh
 ```
 
 脚本默认创建 `env_isaaclab` 环境。要改环境名：
 
 ```bash
-ENV_NAME=my_isaaclab ./scripts/setup_stackforce_isaac_lab_sim_env.sh
+ENV_NAME=my_isaaclab ./scripts/setup_mos_one_isaac_lab_sim_env.sh
 ```
 
 <details>
@@ -274,7 +295,7 @@ nvidia-smi --query-gpu=index,pci.bus_id,name,display_active --format=csv,noheade
 
 CUDA_VISIBLE_DEVICES=<display_active 为 Enabled 的 GPU index> \
     python scripts/rsl_rl/play.py \
-        --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
+        --task MosOne-Mos20262ClosedUsd-ClosedUsd-v0 \
         --checkpoint <checkpoint.pt> \
         --num_envs 1 --disable_resets
 ```
@@ -295,7 +316,7 @@ CUDA_VISIBLE_DEVICES=<display_active 为 Enabled 的 GPU index> \
 ./scripts/rsl_rl/play_latest.sh --num_envs 1 --num_steps 0 --disable_resets
 
 # 想换任务或日志目录，用环境变量覆盖
-TASK=StackForce-Mos20262ClosedUsd-ClosedUsd-v0 LOGS_DIR=logs \
+TASK=MosOne-Mos20262ClosedUsd-ClosedUsd-v0 LOGS_DIR=logs \
     ./scripts/rsl_rl/play_latest.sh
 ```
 
@@ -310,7 +331,7 @@ find logs -name "*.pt" | sort | tail -n 1
 
 # 播放指定 checkpoint
 python scripts/rsl_rl/play.py \
-    --task StackForce-Mos20262ClosedUsd-ClosedUsd-v0 \
+    --task MosOne-Mos20262ClosedUsd-ClosedUsd-v0 \
     --checkpoint <上一步找到的 .pt 文件> \
     --num_envs 20 --disable_resets
 ```
@@ -434,7 +455,7 @@ python scripts/rsl_rl/eval_report.py \
 > [!WARNING]
 > 如果你把整个工程移到新目录，请在新目录重新执行：
 > ```bash
-> python -m pip install -e source/stackforce_mos
+> python -m pip install -e source/mos_one
 > ```
 
 ---
@@ -444,8 +465,8 @@ python scripts/rsl_rl/eval_report.py \
 ### 1️⃣ 编辑 Reward 实现
 
 ```
-source/stackforce_mos/
-  └── stackforce_mos/
+source/mos_one/
+  └── mos_one/
         └── tasks/direct/mos2026_2_closed_usd/
               └── 📄 custom_rewards.py
 ```
@@ -455,8 +476,8 @@ source/stackforce_mos/
 ### 2️⃣ 调整 Reward 权重
 
 ```
-source/stackforce_mos/
-  └── stackforce_mos/
+source/mos_one/
+  └── mos_one/
         └── tasks/direct/mos2026_2_closed_usd/
               └── 📄 mos2026_2_closed_usd_env_cfg.py
 ```
@@ -478,6 +499,6 @@ source/stackforce_mos/
 
 <div align="center">
 
-**Built with ❤️ by [StackForce SimReady](https://stackforce.ai)**
+**Built with ❤️ by [Mos-One SimReady](https://mos-one.ai)**
 
 </div>

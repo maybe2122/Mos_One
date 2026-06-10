@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import torch
 
-from stackforce_mos.tasks.direct.mos2026_2_closed_usd.mos2026_2_closed_usd_env import (
+from mos_one.tasks.direct.mos2026_2_closed_usd.mos2026_2_closed_usd_env import (
     Mos20262ClosedUsdEnv,
 )
 
