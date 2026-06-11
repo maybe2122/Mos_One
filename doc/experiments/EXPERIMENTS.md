@@ -9,7 +9,7 @@
 - **一次有目的的训练 / 调参 / 评估 = 一条 `EXP-XXXX`**。ID 在「立项」时分配，贯穿其生命周期（计划 → 进行 → 完成）不变。
 - 台账**不复制** SwanLab 已有的指标曲线，只记录工具抓不到的**叙事与决策**（为什么改、结论、下一步），用链接指回 SwanLab run / 训练日志目录 / git commit。
 - 来自 `todo.md` 的"下一步"先以 `📋 计划` 立项；执行后**原地回填**结果并改状态，不新建 ID。
-- 新建条目推荐用脚本：`python tools/log_run.py --help`（自动拉 git/训练目录/SwanLab 信息，少手填、不漏链接）。
+- 新建条目推荐用脚本：`python tools/exp/log_run.py --help`（自动拉 git/训练目录/SwanLab 信息，少手填、不漏链接）。
 - 单条模板见 [`TEMPLATE.md`](TEMPLATE.md)。
 - 状态图例：✅ 完成 · 🔄 进行中 · 📋 计划 · ❌ 放弃/证伪
 

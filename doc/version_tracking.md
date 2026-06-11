@@ -17,7 +17,7 @@ todo.md「下一步」                       想做的事
    │  立项（分配 EXP-XXXX，状态 📋 计划）
    ▼
 EXPERIMENTS.md                          一次训练/调参的因果链
-   │  跑完原地回填结果 + 链接（python tools/log_run.py）
+   │  跑完原地回填结果 + 链接（python tools/exp/log_run.py）
    │  状态 📋→✅，SwanLab 曲线在此链接
    ▼
 达成可演示能力 → 打 tag + 写 CHANGELOG    代码能力快照
@@ -31,7 +31,7 @@ EXPERIMENTS.md                          一次训练/调参的因果链
 
 **记一次实验**（训练跑完后，最常用）：
 ```bash
-python3 tools/log_run.py \
+python3 tools/exp/log_run.py \
   --run-dir logs/rsl_rl/<exp>/<ts>_<run_name> \
   --title "指令条件化重训 (obs 45->48)" \
   --hypothesis "指令进 obs 后策略能响应 cmd_vx" \

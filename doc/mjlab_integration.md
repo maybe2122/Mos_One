@@ -3,7 +3,10 @@
 > 目标读者：本项目维护者。
 > 适用栈：现有 **Isaac Sim 5.1.0 + Isaac Lab v2.3.2 + rsl_rl**（Python 3.11 / Torch 2.7 cu128，USD/闭链机器人）。
 >
-> ⚠️ 说明：本文撰写时外网（GitHub/PyPI）受限，**凡涉及版本号、安装命令、模块路径、任务名的地方，均以 [mjlab 仓库 README 与 pyproject](https://github.com/mujocolab/mjlab) 为准**。本文给出的命令是该类项目的“典型形态”，用于占位和说明流程，落地前务必核对。
+> ✅ **2026-06-11 已按 A 方案落地**：submodule 锁定 `0cdc5624`（v1.1.1-257），独立 uv 环境
+> （Python 3.13 / torch 2.9.0+cu128 / mujoco 3.8.1 / warp 1.14.0），RTX 5090 上官方
+> `Mjlab-Velocity-Flat-Unitree-Go1` 任务 3-iter 训练冒烟通过（~1.1s/iter）。
+> **§4 的命令已全部换成实测验证过的真实命令**；§5–§6（接入本机器人）尚未开始。
 
 ---
 
@@ -58,44 +61,51 @@
 
 ---
 
-## 4. 集成步骤（A 方案）
+## 4. 集成步骤（A 方案，✅ 已完成并实测）
 
-### 4.1 添加 submodule
+### 4.1 添加 submodule（已做）
 
 ```bash
 git submodule add https://github.com/mujocolab/mjlab.git third_party/mjlab
-git submodule update --init --recursive
-# 建议锁到具体 commit（mjlab 较新、API 可能变动）：
-cd third_party/mjlab && git checkout <commit-sha> && cd -
-git add .gitmodules third_party/mjlab && git commit -m "add mjlab submodule"
+# 当前锁定：0cdc56246999409b83622764f5b38edb660cf16e（v1.1.1-257-g0cdc5624）
 ```
 
-### 4.2 独立 uv 环境安装（**命令以 README 为准**）
+### 4.2 独立 uv 环境安装（已做，命令已验证）
 
 ```bash
-# 安装 uv（若没有）
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
 cd third_party/mjlab
-# 以下三选一，具体看 mjlab README / pyproject：
-uv sync                  # 仓库自带锁文件时
-# 或
-uv pip install -e .      # 可编辑安装
-# 或（纯依赖方式，对应方案 B）
-# uv add "mjlab @ git+https://github.com/mujocolab/mjlab.git"
+uv sync --extra cu128        # 仓库带 uv.lock；cu128 = CUDA 12.8 版 torch（5090 必需）
 ```
 
-前置条件（以其 pyproject 为准）：**CUDA GPU（Warp 必需）**、Python ≥ 3.10、合适的 `torch`。
-
-### 4.3 先跑官方 demo 验证环境（**别急着上自己的机器人**）
+实测装出的关键版本：**Python 3.13、torch 2.9.0+cu128、mujoco 3.8.1、mujoco-warp、warp-lang 1.14.0**。
+环境位于 `third_party/mjlab/.venv`，与 `env_isaaclab` 完全隔离。
 
 ```bash
-# mjlab 通常自带速度跟踪等示例任务（如 Unitree 系列），命令形如：
-uv run <mjlab-train-entry> --task <Mjlab-Velocity-Flat-...> --num_envs 4096
-uv run <mjlab-play-entry>  --task <...> --checkpoint <...>
+# 验证 GPU 链路
+uv run python -c "import torch; print(torch.cuda.is_available())"   # True
+uv run list-envs                                                     # 列出全部 Mjlab-* 任务
 ```
 
-跑通官方 demo = uv 环境、Warp、GPU 全链路 OK，再进入下一步。
+### 4.3 官方任务冒烟（已通过）
+
+入口是 pyproject 注册的 `train` / `play` / `demo` / `list-envs` 脚本（tyro CLI，嵌套参数）：
+
+```bash
+cd third_party/mjlab
+
+# ✅ 实测：Go1 四足速度任务，64 env × 3 iter，~1.1s/iter（RTX 5090）
+uv run train Mjlab-Velocity-Flat-Unitree-Go1 \
+    --env.scene.num-envs 64 --agent.max-iterations 3 --agent.logger tensorboard
+
+# 正式训练（默认 logger 是 wandb，需要先 wandb login；不想用就 --agent.logger tensorboard）
+uv run train Mjlab-Velocity-Flat-Unitree-Go1 --env.scene.num-envs 4096
+
+# 播放 / 用 zero agent 检查 MDP
+uv run play Mjlab-Velocity-Flat-Unitree-Go1 --agent zero
+```
+
+> 注意：`train.py` 用 `CUDA_VISIBLE_DEVICES` 判断设备（空 = CPU），默认 `gpu_ids=[0]` 会自动设置。
+> 训练日志写到**当前目录**的 `logs/rsl_rl/`——在 submodule 里跑完记得清掉，保持子模块干净。
 
 ---
 
@@ -187,8 +197,8 @@ mos_one/
 
 ## 9. 验证清单（里程碑）
 
-- [ ] mjlab 官方 demo 能训练 + 回放
-- [ ] 自己的 MJCF 在 MuJoCo viewer 里能站立、闭链不发散
+- [x] mjlab 官方 demo 能训练（2026-06-11：Go1 velocity 3-iter 冒烟通过，RTX 5090）
+- [ ] 自己的 MJCF 在 MuJoCo viewer 里能站立、闭链不发散（可复用 `deploy/mujoco/assets/mos2026_2.xml`，由 `tools/asset/usd_to_mjcf.py` 产出）
 - [ ] 关节 axis / actuator 极性与实测一致（measure_joint_signs）
 - [ ] 平地速度跟踪任务跑通、reward 上升
 - [ ] sim2sim：Isaac 训出的 policy 在 mjlab 回放行为合理

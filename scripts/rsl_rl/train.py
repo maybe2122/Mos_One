@@ -8,7 +8,8 @@ from datetime import datetime
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Train a MosOne closed-chain USD task with RSL-RL.")
-parser.add_argument("--num_envs", type=int, default=16000)
+parser.add_argument("--num_envs", type=int, default=8192,
+                    help="并行环境数。默认 16384（=4096×4，按 RTX 5090 32GB 估算）；小卡请显式调低。")
 parser.add_argument("--task", type=str, default="MosOne-Mos20262ClosedUsd-ClosedUsd-v0")
 parser.add_argument("--agent", type=str, default="rsl_rl_cfg_entry_point")
 parser.add_argument("--seed", type=int, default=None)

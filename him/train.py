@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.join(_REPO_ROOT, "source", "mos_one"))
 from isaaclab.app import AppLauncher  # noqa: E402
 
 parser = argparse.ArgumentParser(description="Train HIM on mos2026_2 (Isaac Lab).")
-parser.add_argument("--num_envs", type=int, default=256, help="Number of parallel envs.")
+parser.add_argument("--num_envs", type=int, default=8192, help="Number of parallel envs.")
 parser.add_argument("--max_iterations", type=int, default=200000, help="Policy update iterations.")
 parser.add_argument("--num_steps_per_env", type=int, default=24, help="Rollout length per iteration.")
 parser.add_argument("--seed", type=int, default=1)
@@ -36,6 +36,13 @@ parser.add_argument(
     choices=["flat", "rough", "curriculum"],
     help="Ground: 'flat' (plane), 'rough' (heightfield), or 'curriculum' (flat->rough+stairs).",
 )
+# --- 域随机化 / sim2real（与 scripts/rsl_rl/train.py 同款；默认关闭）---
+# 注意：HIM 自带 actor 观测噪声（him_env_cfg.him_actor_noise，默认开、分块均匀噪声），
+# 基类的 --obs_noise_std 路径被 HIM 的 _get_observations 覆写绕开，故这里不提供该参数。
+parser.add_argument("--domain_rand", action="store_true",
+                    help="启用域随机化事件（摩擦/质量/增益/关节零位偏置/周期推搡）。默认关闭。")
+parser.add_argument("--no_actor_noise", action="store_true",
+                    help="关闭 HIM 的 actor 观测噪声（him_actor_noise，默认开启）。")
 # --- SwanLab 实验跟踪（镜像 HIM runner 的 TensorBoard 标量）---
 parser.add_argument("--no_swanlab", action="store_true",
                     help="关闭 SwanLab 实验跟踪（默认开启；未安装 swanlab 时自动跳过）。")
@@ -57,6 +64,7 @@ import torch  # noqa: E402
 from mos_one.tasks.direct.mos2026_2_closed_usd.mos2026_2_closed_usd_env_cfg import (  # noqa: E402
     CURRICULUM_TERRAIN_CFG,
     ROUGH_TERRAIN_CFG,
+    EventCfg,
 )
 from him_env_cfg import Mos20262ClosedUsdHIMEnvCfg  # noqa: E402
 from him_env import Mos20262ClosedUsdHIMEnv  # noqa: E402
@@ -92,6 +100,8 @@ def _init_swanlab(args, env_cfg, train_cfg, log_dir):
             "num_steps_per_env": args.num_steps_per_env,
             "seed": args.seed,
             "terrain": args.terrain,
+            "domain_rand": bool(args.domain_rand),
+            "him_actor_noise": not args.no_actor_noise,
             # HIM 观测/网络
             "num_actor_obs": 270,
             "num_privileged_obs": 51,
@@ -156,6 +166,19 @@ def main():
         env_cfg.terrain.terrain_type = "plane"
         env_cfg.terrain.terrain_generator = None
         env_cfg.terrain_curriculum_enabled = False
+
+    # 域随机化（sim2real）。默认关闭；--domain_rand 时挂载 EventCfg，DirectRLEnv
+    # 检测到 cfg.events 非空会自动建 EventManager（与 scripts/rsl_rl/train.py 同机制）。
+    if args.domain_rand:
+        env_cfg.events = EventCfg()
+        print("[HIM-Mos] 域随机化已启用（摩擦/质量/增益/关节零位/推搡）。"
+              "首次启用请先小 env 冒烟。")
+    else:
+        env_cfg.events = None
+    # HIM actor 观测噪声（默认开）：--no_actor_noise 关闭，训干净 obs 基线用。
+    env_cfg.him_actor_noise = not args.no_actor_noise
+    if args.no_actor_noise:
+        print("[HIM-Mos] HIM actor 观测噪声已关闭（him_actor_noise=False）。")
 
     env = Mos20262ClosedUsdHIMEnv(cfg=env_cfg)
     vec_env = HIMVecEnvAdapter(env)

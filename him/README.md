@@ -39,6 +39,8 @@ The actor input is 6 stacked `one_step_obs` frames (newest-first), maintained in
   + the 7-tuple `step()` the HIM runner expects.
 - `him_cfg.py` — HIM hyperparameters (matches HIMLoco / the Go2 port).
 - `train.py` — launches Isaac Sim, builds env+adapter, runs `HIMOnPolicyRunner`.
+- `play.py` — loads a HIM checkpoint and plays it deterministically
+  (estimator vel+latent + actor, 干净 obs，无域随机化).
 - `him_rl/` — HIMLoco's rsl_rl fork (vendored; pure Python).
 
 ## Run
@@ -48,13 +50,38 @@ Use the shared Isaac Lab env (`env_isaaclab`, the one with isaaclab + torch).
 
 ```bash
 # GUI (few envs)
-/home/maybe/code/rl/env_isaaclab/bin/python him/train.py --num_envs 256
+../env_isaaclab/bin/python him/train.py --num_envs 256
 
-# headless (full)
-/home/maybe/code/rl/env_isaaclab/bin/python him/train.py --headless --num_envs 4096
+# headless (full)；务必显式给 --max_iterations（默认值大到不会自己停）
+../env_isaaclab/bin/python him/train.py --headless --num_envs 4096 --max_iterations 1500
 
 # rough / curriculum terrain
-/home/maybe/code/rl/env_isaaclab/bin/python him/train.py --headless --num_envs 4096 --terrain curriculum
+../env_isaaclab/bin/python him/train.py --headless --num_envs 4096 --terrain curriculum
+
+# 域随机化（sim2real 建议开；与 scripts/rsl_rl/train.py 同一套 EventCfg：
+# 摩擦/质量/Kp-Kd/关节零位/周期推搡。首次开请先小 env 冒烟）
+../env_isaaclab/bin/python him/train.py --headless --num_envs 4096 \
+    --max_iterations 1500 --domain_rand
+
+# 关闭 HIM 自带的 actor 观测噪声（默认开；训干净基线用）
+../env_isaaclab/bin/python him/train.py ... --no_actor_noise
+```
+
+> HIM 的观测噪声由 `him_actor_noise`（分块均匀噪声，默认开）控制；基类的
+> `--obs_noise_std` 高斯噪声路径被 HIM 的 `_get_observations` 覆写绕开，对 HIM 无效。
+
+## Play（验证训练效果）
+
+```bash
+# GUI：自动挑 him/logs 下最新 checkpoint
+../env_isaaclab/bin/python him/play.py
+
+# headless 验证（必须给 --num_steps）
+../env_isaaclab/bin/python him/play.py --headless --num_steps 500 --num_envs 4
+
+# 指定 checkpoint / 地形（应与训练一致）
+../env_isaaclab/bin/python him/play.py \
+    --checkpoint him/logs/mos2026_2_him/<run>/model_1500.pt --terrain curriculum
 ```
 
 Logs (TensorBoard) go to `him/logs/<experiment_name>/<timestamp>_<run_name>/`.

@@ -3,6 +3,11 @@
   <compiler angle="radian" autolimits="true" balanceinertia="true" meshdir="meshes"/>
   <option timestep="0.005" gravity="0 0 -9.81" iterations="50" solver="Newton" integrator="implicitfast"/>
   <default>
+    <!-- Contact stiffness: the MuJoCo default solref (0.02 1) lets the 6.2 kg
+         robot sink 3-6 mm into the floor at rest (feet visibly clip through
+         when prone). 5 ms is 16x stiffer (<0.5 mm sink) and still stable at
+         the 1 kHz timestep (needs timeconst >= 2*dt = 2 ms). -->
+    <geom solref="0.005 1" solimp="0.9 0.99 0.001"/>
     <default class="body_visual">
       <geom rgba="0.55 0.55 0.6 1" contype="2" conaffinity="1" friction="1.5 0.1 0.01"/>
     </default>
@@ -39,6 +44,71 @@
     <mesh name="rr_shank_motor_gear_mesh" file="rr_shank_motor_gear.obj"/>
     <mesh name="rr_thigh_mesh" file="rr_thigh.obj"/>
     <mesh name="rr_thigh_motor_gear_mesh" file="rr_thigh_motor_gear.obj"/>
+    <!-- knee-collision (add_knee_self_collision.py): convex pieces for thigh/shank mechanical-stop pairs -->
+    <mesh name="fl_thigh_cvx0_mesh" file="collision/fl_thigh_cvx0.obj"/>
+    <mesh name="fl_thigh_cvx1_mesh" file="collision/fl_thigh_cvx1.obj"/>
+    <mesh name="fl_thigh_cvx2_mesh" file="collision/fl_thigh_cvx2.obj"/>
+    <mesh name="fl_thigh_cvx3_mesh" file="collision/fl_thigh_cvx3.obj"/>
+    <mesh name="fl_thigh_cvx4_mesh" file="collision/fl_thigh_cvx4.obj"/>
+    <mesh name="fl_thigh_cvx5_mesh" file="collision/fl_thigh_cvx5.obj"/>
+    <mesh name="fl_thigh_cvx6_mesh" file="collision/fl_thigh_cvx6.obj"/>
+    <mesh name="fl_thigh_cvx7_mesh" file="collision/fl_thigh_cvx7.obj"/>
+    <mesh name="fl_shank_cvx0_mesh" file="collision/fl_shank_cvx0.obj"/>
+    <mesh name="fl_shank_cvx1_mesh" file="collision/fl_shank_cvx1.obj"/>
+    <mesh name="fl_shank_cvx2_mesh" file="collision/fl_shank_cvx2.obj"/>
+    <mesh name="fl_shank_cvx3_mesh" file="collision/fl_shank_cvx3.obj"/>
+    <mesh name="fl_shank_cvx4_mesh" file="collision/fl_shank_cvx4.obj"/>
+    <mesh name="fl_shank_cvx5_mesh" file="collision/fl_shank_cvx5.obj"/>
+    <mesh name="fl_shank_cvx6_mesh" file="collision/fl_shank_cvx6.obj"/>
+    <mesh name="fl_shank_cvx7_mesh" file="collision/fl_shank_cvx7.obj"/>
+    <mesh name="fr_thigh_cvx0_mesh" file="collision/fr_thigh_cvx0.obj"/>
+    <mesh name="fr_thigh_cvx1_mesh" file="collision/fr_thigh_cvx1.obj"/>
+    <mesh name="fr_thigh_cvx2_mesh" file="collision/fr_thigh_cvx2.obj"/>
+    <mesh name="fr_thigh_cvx3_mesh" file="collision/fr_thigh_cvx3.obj"/>
+    <mesh name="fr_thigh_cvx4_mesh" file="collision/fr_thigh_cvx4.obj"/>
+    <mesh name="fr_thigh_cvx5_mesh" file="collision/fr_thigh_cvx5.obj"/>
+    <mesh name="fr_thigh_cvx6_mesh" file="collision/fr_thigh_cvx6.obj"/>
+    <mesh name="fr_thigh_cvx7_mesh" file="collision/fr_thigh_cvx7.obj"/>
+    <mesh name="fr_shank_cvx0_mesh" file="collision/fr_shank_cvx0.obj"/>
+    <mesh name="fr_shank_cvx1_mesh" file="collision/fr_shank_cvx1.obj"/>
+    <mesh name="fr_shank_cvx2_mesh" file="collision/fr_shank_cvx2.obj"/>
+    <mesh name="fr_shank_cvx3_mesh" file="collision/fr_shank_cvx3.obj"/>
+    <mesh name="fr_shank_cvx4_mesh" file="collision/fr_shank_cvx4.obj"/>
+    <mesh name="fr_shank_cvx5_mesh" file="collision/fr_shank_cvx5.obj"/>
+    <mesh name="fr_shank_cvx6_mesh" file="collision/fr_shank_cvx6.obj"/>
+    <mesh name="fr_shank_cvx7_mesh" file="collision/fr_shank_cvx7.obj"/>
+    <mesh name="rl_thigh_cvx0_mesh" file="collision/rl_thigh_cvx0.obj"/>
+    <mesh name="rl_thigh_cvx1_mesh" file="collision/rl_thigh_cvx1.obj"/>
+    <mesh name="rl_thigh_cvx2_mesh" file="collision/rl_thigh_cvx2.obj"/>
+    <mesh name="rl_thigh_cvx3_mesh" file="collision/rl_thigh_cvx3.obj"/>
+    <mesh name="rl_thigh_cvx4_mesh" file="collision/rl_thigh_cvx4.obj"/>
+    <mesh name="rl_thigh_cvx5_mesh" file="collision/rl_thigh_cvx5.obj"/>
+    <mesh name="rl_thigh_cvx6_mesh" file="collision/rl_thigh_cvx6.obj"/>
+    <mesh name="rl_thigh_cvx7_mesh" file="collision/rl_thigh_cvx7.obj"/>
+    <mesh name="rl_shank_cvx0_mesh" file="collision/rl_shank_cvx0.obj"/>
+    <mesh name="rl_shank_cvx1_mesh" file="collision/rl_shank_cvx1.obj"/>
+    <mesh name="rl_shank_cvx2_mesh" file="collision/rl_shank_cvx2.obj"/>
+    <mesh name="rl_shank_cvx3_mesh" file="collision/rl_shank_cvx3.obj"/>
+    <mesh name="rl_shank_cvx4_mesh" file="collision/rl_shank_cvx4.obj"/>
+    <mesh name="rl_shank_cvx5_mesh" file="collision/rl_shank_cvx5.obj"/>
+    <mesh name="rl_shank_cvx6_mesh" file="collision/rl_shank_cvx6.obj"/>
+    <mesh name="rl_shank_cvx7_mesh" file="collision/rl_shank_cvx7.obj"/>
+    <mesh name="rr_thigh_cvx0_mesh" file="collision/rr_thigh_cvx0.obj"/>
+    <mesh name="rr_thigh_cvx1_mesh" file="collision/rr_thigh_cvx1.obj"/>
+    <mesh name="rr_thigh_cvx2_mesh" file="collision/rr_thigh_cvx2.obj"/>
+    <mesh name="rr_thigh_cvx3_mesh" file="collision/rr_thigh_cvx3.obj"/>
+    <mesh name="rr_thigh_cvx4_mesh" file="collision/rr_thigh_cvx4.obj"/>
+    <mesh name="rr_thigh_cvx5_mesh" file="collision/rr_thigh_cvx5.obj"/>
+    <mesh name="rr_thigh_cvx6_mesh" file="collision/rr_thigh_cvx6.obj"/>
+    <mesh name="rr_thigh_cvx7_mesh" file="collision/rr_thigh_cvx7.obj"/>
+    <mesh name="rr_shank_cvx0_mesh" file="collision/rr_shank_cvx0.obj"/>
+    <mesh name="rr_shank_cvx1_mesh" file="collision/rr_shank_cvx1.obj"/>
+    <mesh name="rr_shank_cvx2_mesh" file="collision/rr_shank_cvx2.obj"/>
+    <mesh name="rr_shank_cvx3_mesh" file="collision/rr_shank_cvx3.obj"/>
+    <mesh name="rr_shank_cvx4_mesh" file="collision/rr_shank_cvx4.obj"/>
+    <mesh name="rr_shank_cvx5_mesh" file="collision/rr_shank_cvx5.obj"/>
+    <mesh name="rr_shank_cvx6_mesh" file="collision/rr_shank_cvx6.obj"/>
+    <mesh name="rr_shank_cvx7_mesh" file="collision/rr_shank_cvx7.obj"/>
   </asset>
   <worldbody>
     <light name="spot" pos="0 0 3" dir="0 0 -1" directional="true"/>
@@ -76,11 +146,27 @@
           <inertial mass="0.218416" pos="-0.038288 -0.006463 -0.028166" diaginertia="0.000087 0.000729 0.000667" quat="0.950074 0.003534 -0.311819 -0.010768"/>
           <geom name="fl_thigh_geom" type="mesh" mesh="fl_thigh_mesh" class="body_visual" rgba="1 1 1 0"/>
           <geom name="fl_thigh_visual" type="mesh" mesh="fl_thigh_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
+          <geom name="fl_thigh_cvx0" type="mesh" mesh="fl_thigh_cvx0_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="fl_thigh_cvx1" type="mesh" mesh="fl_thigh_cvx1_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="fl_thigh_cvx2" type="mesh" mesh="fl_thigh_cvx2_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="fl_thigh_cvx3" type="mesh" mesh="fl_thigh_cvx3_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="fl_thigh_cvx4" type="mesh" mesh="fl_thigh_cvx4_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="fl_thigh_cvx5" type="mesh" mesh="fl_thigh_cvx5_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="fl_thigh_cvx6" type="mesh" mesh="fl_thigh_cvx6_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="fl_thigh_cvx7" type="mesh" mesh="fl_thigh_cvx7_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
           <body name="fl_shank" pos="-0.144992 0.008000 -0.106664" quat="1.000000 0.000000 0.000000 0.000000">
             <joint name="fl_shank" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 -1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
             <inertial mass="0.286222" pos="0.053689 -0.004525 -0.041214" diaginertia="0.000064 0.001309 0.001261" quat="0.924069 -0.000323 0.382225 0.000664"/>
             <geom name="fl_shank_geom" type="mesh" mesh="fl_shank_mesh" class="body_visual" rgba="1 1 1 0"/>
             <geom name="fl_shank_visual" type="mesh" mesh="fl_shank_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
+            <geom name="fl_shank_cvx0" type="mesh" mesh="fl_shank_cvx0_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="fl_shank_cvx1" type="mesh" mesh="fl_shank_cvx1_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="fl_shank_cvx2" type="mesh" mesh="fl_shank_cvx2_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="fl_shank_cvx3" type="mesh" mesh="fl_shank_cvx3_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="fl_shank_cvx4" type="mesh" mesh="fl_shank_cvx4_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="fl_shank_cvx5" type="mesh" mesh="fl_shank_cvx5_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="fl_shank_cvx6" type="mesh" mesh="fl_shank_cvx6_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="fl_shank_cvx7" type="mesh" mesh="fl_shank_cvx7_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
           </body>
         </body>
         <body name="fl_thigh_motor_gear" pos="-0.166000 0.046150 0.000000" quat="1.000000 0.000000 0.000000 0.000000">
@@ -118,11 +204,27 @@
           <inertial mass="0.218416" pos="-0.038288 0.006463 -0.028167" diaginertia="0.000087 0.000729 0.000667" quat="0.950074 -0.003534 -0.311819 0.010768"/>
           <geom name="fr_thigh_geom" type="mesh" mesh="fr_thigh_mesh" class="body_visual" rgba="1 1 1 0"/>
           <geom name="fr_thigh_visual" type="mesh" mesh="fr_thigh_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
+          <geom name="fr_thigh_cvx0" type="mesh" mesh="fr_thigh_cvx0_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="fr_thigh_cvx1" type="mesh" mesh="fr_thigh_cvx1_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="fr_thigh_cvx2" type="mesh" mesh="fr_thigh_cvx2_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="fr_thigh_cvx3" type="mesh" mesh="fr_thigh_cvx3_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="fr_thigh_cvx4" type="mesh" mesh="fr_thigh_cvx4_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="fr_thigh_cvx5" type="mesh" mesh="fr_thigh_cvx5_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="fr_thigh_cvx6" type="mesh" mesh="fr_thigh_cvx6_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="fr_thigh_cvx7" type="mesh" mesh="fr_thigh_cvx7_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
           <body name="fr_shank" pos="-0.144992 -0.008000 -0.106664" quat="1.000000 0.000000 0.000000 0.000000">
             <joint name="fr_shank" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
             <inertial mass="0.286223" pos="0.053689 0.002521 -0.041214" diaginertia="0.000064 0.001309 0.001261" quat="0.924069 0.000323 0.382225 -0.000664"/>
             <geom name="fr_shank_geom" type="mesh" mesh="fr_shank_mesh" class="body_visual" rgba="1 1 1 0"/>
             <geom name="fr_shank_visual" type="mesh" mesh="fr_shank_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
+            <geom name="fr_shank_cvx0" type="mesh" mesh="fr_shank_cvx0_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="fr_shank_cvx1" type="mesh" mesh="fr_shank_cvx1_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="fr_shank_cvx2" type="mesh" mesh="fr_shank_cvx2_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="fr_shank_cvx3" type="mesh" mesh="fr_shank_cvx3_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="fr_shank_cvx4" type="mesh" mesh="fr_shank_cvx4_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="fr_shank_cvx5" type="mesh" mesh="fr_shank_cvx5_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="fr_shank_cvx6" type="mesh" mesh="fr_shank_cvx6_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="fr_shank_cvx7" type="mesh" mesh="fr_shank_cvx7_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
           </body>
         </body>
         <body name="fr_thigh_motor_gear" pos="-0.166000 -0.046150 0.000000" quat="1.000000 0.000000 0.000000 0.000000">
@@ -160,11 +262,27 @@
           <inertial mass="0.218416" pos="-0.038288 -0.025463 -0.028166" diaginertia="0.000087 0.000729 0.000667" quat="0.950074 0.003534 -0.311819 -0.010768"/>
           <geom name="rl_thigh_geom" type="mesh" mesh="rl_thigh_mesh" class="body_visual" rgba="1 1 1 0"/>
           <geom name="rl_thigh_visual" type="mesh" mesh="rl_thigh_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
+          <geom name="rl_thigh_cvx0" type="mesh" mesh="rl_thigh_cvx0_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="rl_thigh_cvx1" type="mesh" mesh="rl_thigh_cvx1_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="rl_thigh_cvx2" type="mesh" mesh="rl_thigh_cvx2_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="rl_thigh_cvx3" type="mesh" mesh="rl_thigh_cvx3_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="rl_thigh_cvx4" type="mesh" mesh="rl_thigh_cvx4_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="rl_thigh_cvx5" type="mesh" mesh="rl_thigh_cvx5_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="rl_thigh_cvx6" type="mesh" mesh="rl_thigh_cvx6_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="rl_thigh_cvx7" type="mesh" mesh="rl_thigh_cvx7_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
           <body name="rl_shank" pos="-0.144992 -0.011000 -0.106664" quat="1.000000 0.000000 0.000000 0.000000">
             <joint name="rl_shank" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 -1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
             <inertial mass="0.286222" pos="0.053689 -0.004525 -0.041214" diaginertia="0.000064 0.001309 0.001261" quat="0.924069 -0.000323 0.382225 0.000664"/>
             <geom name="rl_shank_geom" type="mesh" mesh="rl_shank_mesh" class="body_visual" rgba="1 1 1 0"/>
             <geom name="rl_shank_visual" type="mesh" mesh="rl_shank_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
+            <geom name="rl_shank_cvx0" type="mesh" mesh="rl_shank_cvx0_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="rl_shank_cvx1" type="mesh" mesh="rl_shank_cvx1_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="rl_shank_cvx2" type="mesh" mesh="rl_shank_cvx2_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="rl_shank_cvx3" type="mesh" mesh="rl_shank_cvx3_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="rl_shank_cvx4" type="mesh" mesh="rl_shank_cvx4_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="rl_shank_cvx5" type="mesh" mesh="rl_shank_cvx5_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="rl_shank_cvx6" type="mesh" mesh="rl_shank_cvx6_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="rl_shank_cvx7" type="mesh" mesh="rl_shank_cvx7_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
           </body>
         </body>
         <body name="rl_thigh_motor_gear" pos="0.077029 0.046150 0.000000" quat="1.000000 0.000000 0.000000 0.000000">
@@ -202,11 +320,27 @@
           <inertial mass="0.218416" pos="-0.038288 0.006463 -0.028167" diaginertia="0.000087 0.000729 0.000667" quat="0.950074 -0.003534 -0.311819 0.010768"/>
           <geom name="rr_thigh_geom" type="mesh" mesh="rr_thigh_mesh" class="body_visual" rgba="1 1 1 0"/>
           <geom name="rr_thigh_visual" type="mesh" mesh="rr_thigh_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
+          <geom name="rr_thigh_cvx0" type="mesh" mesh="rr_thigh_cvx0_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="rr_thigh_cvx1" type="mesh" mesh="rr_thigh_cvx1_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="rr_thigh_cvx2" type="mesh" mesh="rr_thigh_cvx2_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="rr_thigh_cvx3" type="mesh" mesh="rr_thigh_cvx3_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="rr_thigh_cvx4" type="mesh" mesh="rr_thigh_cvx4_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="rr_thigh_cvx5" type="mesh" mesh="rr_thigh_cvx5_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="rr_thigh_cvx6" type="mesh" mesh="rr_thigh_cvx6_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+          <geom name="rr_thigh_cvx7" type="mesh" mesh="rr_thigh_cvx7_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
           <body name="rr_shank" pos="-0.144992 -0.008000 -0.106664" quat="1.000000 0.000000 0.000000 0.000000">
             <joint name="rr_shank" type="hinge" pos="0.000000 0.000000 0.000000" axis="0.000000 1.000000 0.000000" damping="0.05" range="-1.570000 1.570000" limited="true"/>
             <inertial mass="0.286223" pos="0.053689 0.002521 -0.041214" diaginertia="0.000064 0.001309 0.001261" quat="0.924069 0.000323 0.382225 -0.000664"/>
             <geom name="rr_shank_geom" type="mesh" mesh="rr_shank_mesh" class="body_visual" rgba="1 1 1 0"/>
             <geom name="rr_shank_visual" type="mesh" mesh="rr_shank_mesh" contype="0" conaffinity="0" group="1" rgba="0.75 0.75 0.78 1"/>
+            <geom name="rr_shank_cvx0" type="mesh" mesh="rr_shank_cvx0_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="rr_shank_cvx1" type="mesh" mesh="rr_shank_cvx1_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="rr_shank_cvx2" type="mesh" mesh="rr_shank_cvx2_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="rr_shank_cvx3" type="mesh" mesh="rr_shank_cvx3_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="rr_shank_cvx4" type="mesh" mesh="rr_shank_cvx4_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="rr_shank_cvx5" type="mesh" mesh="rr_shank_cvx5_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="rr_shank_cvx6" type="mesh" mesh="rr_shank_cvx6_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
+            <geom name="rr_shank_cvx7" type="mesh" mesh="rr_shank_cvx7_mesh" contype="0" conaffinity="0" group="4" rgba="0.9 0.2 0.2 0.3"/>
           </body>
         </body>
         <body name="rr_thigh_motor_gear" pos="0.060000 -0.046150 0.000000" quat="1.000000 0.000000 0.000000 0.000000">
@@ -218,6 +352,251 @@
       </body>
     </body>
   </worldbody>
+  <!-- knee-collision (add_knee_self_collision.py): thigh-shank mechanical stop -->
+  <contact>
+    <pair geom1="fl_thigh_cvx0" geom2="fl_shank_cvx0"/>
+    <pair geom1="fl_thigh_cvx0" geom2="fl_shank_cvx1"/>
+    <pair geom1="fl_thigh_cvx0" geom2="fl_shank_cvx2"/>
+    <pair geom1="fl_thigh_cvx0" geom2="fl_shank_cvx3"/>
+    <pair geom1="fl_thigh_cvx0" geom2="fl_shank_cvx4"/>
+    <pair geom1="fl_thigh_cvx0" geom2="fl_shank_cvx5"/>
+    <pair geom1="fl_thigh_cvx0" geom2="fl_shank_cvx6"/>
+    <pair geom1="fl_thigh_cvx0" geom2="fl_shank_cvx7"/>
+    <pair geom1="fl_thigh_cvx1" geom2="fl_shank_cvx0"/>
+    <pair geom1="fl_thigh_cvx1" geom2="fl_shank_cvx1"/>
+    <pair geom1="fl_thigh_cvx1" geom2="fl_shank_cvx2"/>
+    <pair geom1="fl_thigh_cvx1" geom2="fl_shank_cvx3"/>
+    <pair geom1="fl_thigh_cvx1" geom2="fl_shank_cvx4"/>
+    <pair geom1="fl_thigh_cvx1" geom2="fl_shank_cvx5"/>
+    <pair geom1="fl_thigh_cvx1" geom2="fl_shank_cvx6"/>
+    <pair geom1="fl_thigh_cvx1" geom2="fl_shank_cvx7"/>
+    <pair geom1="fl_thigh_cvx2" geom2="fl_shank_cvx0"/>
+    <pair geom1="fl_thigh_cvx2" geom2="fl_shank_cvx1"/>
+    <pair geom1="fl_thigh_cvx2" geom2="fl_shank_cvx2"/>
+    <pair geom1="fl_thigh_cvx2" geom2="fl_shank_cvx3"/>
+    <pair geom1="fl_thigh_cvx2" geom2="fl_shank_cvx4"/>
+    <pair geom1="fl_thigh_cvx2" geom2="fl_shank_cvx5"/>
+    <pair geom1="fl_thigh_cvx2" geom2="fl_shank_cvx6"/>
+    <pair geom1="fl_thigh_cvx2" geom2="fl_shank_cvx7"/>
+    <pair geom1="fl_thigh_cvx3" geom2="fl_shank_cvx0"/>
+    <pair geom1="fl_thigh_cvx3" geom2="fl_shank_cvx1"/>
+    <pair geom1="fl_thigh_cvx3" geom2="fl_shank_cvx2"/>
+    <pair geom1="fl_thigh_cvx3" geom2="fl_shank_cvx3"/>
+    <pair geom1="fl_thigh_cvx3" geom2="fl_shank_cvx4"/>
+    <pair geom1="fl_thigh_cvx3" geom2="fl_shank_cvx5"/>
+    <pair geom1="fl_thigh_cvx3" geom2="fl_shank_cvx6"/>
+    <pair geom1="fl_thigh_cvx3" geom2="fl_shank_cvx7"/>
+    <pair geom1="fl_thigh_cvx4" geom2="fl_shank_cvx0"/>
+    <pair geom1="fl_thigh_cvx4" geom2="fl_shank_cvx1"/>
+    <pair geom1="fl_thigh_cvx4" geom2="fl_shank_cvx2"/>
+    <pair geom1="fl_thigh_cvx4" geom2="fl_shank_cvx3"/>
+    <pair geom1="fl_thigh_cvx4" geom2="fl_shank_cvx4"/>
+    <pair geom1="fl_thigh_cvx4" geom2="fl_shank_cvx5"/>
+    <pair geom1="fl_thigh_cvx4" geom2="fl_shank_cvx6"/>
+    <pair geom1="fl_thigh_cvx4" geom2="fl_shank_cvx7"/>
+    <pair geom1="fl_thigh_cvx5" geom2="fl_shank_cvx0"/>
+    <pair geom1="fl_thigh_cvx5" geom2="fl_shank_cvx1"/>
+    <pair geom1="fl_thigh_cvx5" geom2="fl_shank_cvx2"/>
+    <pair geom1="fl_thigh_cvx5" geom2="fl_shank_cvx3"/>
+    <pair geom1="fl_thigh_cvx5" geom2="fl_shank_cvx4"/>
+    <pair geom1="fl_thigh_cvx5" geom2="fl_shank_cvx5"/>
+    <pair geom1="fl_thigh_cvx5" geom2="fl_shank_cvx6"/>
+    <pair geom1="fl_thigh_cvx5" geom2="fl_shank_cvx7"/>
+    <pair geom1="fl_thigh_cvx6" geom2="fl_shank_cvx0"/>
+    <pair geom1="fl_thigh_cvx6" geom2="fl_shank_cvx1"/>
+    <pair geom1="fl_thigh_cvx6" geom2="fl_shank_cvx2"/>
+    <pair geom1="fl_thigh_cvx6" geom2="fl_shank_cvx3"/>
+    <pair geom1="fl_thigh_cvx6" geom2="fl_shank_cvx4"/>
+    <pair geom1="fl_thigh_cvx6" geom2="fl_shank_cvx5"/>
+    <pair geom1="fl_thigh_cvx6" geom2="fl_shank_cvx6"/>
+    <pair geom1="fl_thigh_cvx6" geom2="fl_shank_cvx7"/>
+    <pair geom1="fl_thigh_cvx7" geom2="fl_shank_cvx1"/>
+    <pair geom1="fl_thigh_cvx7" geom2="fl_shank_cvx2"/>
+    <pair geom1="fl_thigh_cvx7" geom2="fl_shank_cvx3"/>
+    <pair geom1="fl_thigh_cvx7" geom2="fl_shank_cvx4"/>
+    <pair geom1="fl_thigh_cvx7" geom2="fl_shank_cvx6"/>
+    <pair geom1="fl_thigh_cvx7" geom2="fl_shank_cvx7"/>
+    <pair geom1="fr_thigh_cvx0" geom2="fr_shank_cvx0"/>
+    <pair geom1="fr_thigh_cvx0" geom2="fr_shank_cvx1"/>
+    <pair geom1="fr_thigh_cvx0" geom2="fr_shank_cvx2"/>
+    <pair geom1="fr_thigh_cvx0" geom2="fr_shank_cvx3"/>
+    <pair geom1="fr_thigh_cvx0" geom2="fr_shank_cvx4"/>
+    <pair geom1="fr_thigh_cvx0" geom2="fr_shank_cvx5"/>
+    <pair geom1="fr_thigh_cvx0" geom2="fr_shank_cvx6"/>
+    <pair geom1="fr_thigh_cvx0" geom2="fr_shank_cvx7"/>
+    <pair geom1="fr_thigh_cvx1" geom2="fr_shank_cvx0"/>
+    <pair geom1="fr_thigh_cvx1" geom2="fr_shank_cvx1"/>
+    <pair geom1="fr_thigh_cvx1" geom2="fr_shank_cvx2"/>
+    <pair geom1="fr_thigh_cvx1" geom2="fr_shank_cvx3"/>
+    <pair geom1="fr_thigh_cvx1" geom2="fr_shank_cvx4"/>
+    <pair geom1="fr_thigh_cvx1" geom2="fr_shank_cvx5"/>
+    <pair geom1="fr_thigh_cvx1" geom2="fr_shank_cvx6"/>
+    <pair geom1="fr_thigh_cvx1" geom2="fr_shank_cvx7"/>
+    <pair geom1="fr_thigh_cvx2" geom2="fr_shank_cvx0"/>
+    <pair geom1="fr_thigh_cvx2" geom2="fr_shank_cvx1"/>
+    <pair geom1="fr_thigh_cvx2" geom2="fr_shank_cvx2"/>
+    <pair geom1="fr_thigh_cvx2" geom2="fr_shank_cvx3"/>
+    <pair geom1="fr_thigh_cvx2" geom2="fr_shank_cvx4"/>
+    <pair geom1="fr_thigh_cvx2" geom2="fr_shank_cvx5"/>
+    <pair geom1="fr_thigh_cvx2" geom2="fr_shank_cvx6"/>
+    <pair geom1="fr_thigh_cvx2" geom2="fr_shank_cvx7"/>
+    <pair geom1="fr_thigh_cvx3" geom2="fr_shank_cvx0"/>
+    <pair geom1="fr_thigh_cvx3" geom2="fr_shank_cvx4"/>
+    <pair geom1="fr_thigh_cvx3" geom2="fr_shank_cvx6"/>
+    <pair geom1="fr_thigh_cvx4" geom2="fr_shank_cvx0"/>
+    <pair geom1="fr_thigh_cvx4" geom2="fr_shank_cvx1"/>
+    <pair geom1="fr_thigh_cvx4" geom2="fr_shank_cvx2"/>
+    <pair geom1="fr_thigh_cvx4" geom2="fr_shank_cvx3"/>
+    <pair geom1="fr_thigh_cvx4" geom2="fr_shank_cvx4"/>
+    <pair geom1="fr_thigh_cvx4" geom2="fr_shank_cvx5"/>
+    <pair geom1="fr_thigh_cvx4" geom2="fr_shank_cvx6"/>
+    <pair geom1="fr_thigh_cvx4" geom2="fr_shank_cvx7"/>
+    <pair geom1="fr_thigh_cvx5" geom2="fr_shank_cvx0"/>
+    <pair geom1="fr_thigh_cvx5" geom2="fr_shank_cvx1"/>
+    <pair geom1="fr_thigh_cvx5" geom2="fr_shank_cvx2"/>
+    <pair geom1="fr_thigh_cvx5" geom2="fr_shank_cvx3"/>
+    <pair geom1="fr_thigh_cvx5" geom2="fr_shank_cvx4"/>
+    <pair geom1="fr_thigh_cvx5" geom2="fr_shank_cvx5"/>
+    <pair geom1="fr_thigh_cvx5" geom2="fr_shank_cvx6"/>
+    <pair geom1="fr_thigh_cvx5" geom2="fr_shank_cvx7"/>
+    <pair geom1="fr_thigh_cvx6" geom2="fr_shank_cvx0"/>
+    <pair geom1="fr_thigh_cvx6" geom2="fr_shank_cvx1"/>
+    <pair geom1="fr_thigh_cvx6" geom2="fr_shank_cvx2"/>
+    <pair geom1="fr_thigh_cvx6" geom2="fr_shank_cvx4"/>
+    <pair geom1="fr_thigh_cvx6" geom2="fr_shank_cvx5"/>
+    <pair geom1="fr_thigh_cvx6" geom2="fr_shank_cvx6"/>
+    <pair geom1="fr_thigh_cvx6" geom2="fr_shank_cvx7"/>
+    <pair geom1="fr_thigh_cvx7" geom2="fr_shank_cvx0"/>
+    <pair geom1="fr_thigh_cvx7" geom2="fr_shank_cvx1"/>
+    <pair geom1="fr_thigh_cvx7" geom2="fr_shank_cvx2"/>
+    <pair geom1="fr_thigh_cvx7" geom2="fr_shank_cvx3"/>
+    <pair geom1="fr_thigh_cvx7" geom2="fr_shank_cvx4"/>
+    <pair geom1="fr_thigh_cvx7" geom2="fr_shank_cvx5"/>
+    <pair geom1="fr_thigh_cvx7" geom2="fr_shank_cvx6"/>
+    <pair geom1="fr_thigh_cvx7" geom2="fr_shank_cvx7"/>
+    <pair geom1="rl_thigh_cvx0" geom2="rl_shank_cvx0"/>
+    <pair geom1="rl_thigh_cvx0" geom2="rl_shank_cvx1"/>
+    <pair geom1="rl_thigh_cvx0" geom2="rl_shank_cvx2"/>
+    <pair geom1="rl_thigh_cvx0" geom2="rl_shank_cvx3"/>
+    <pair geom1="rl_thigh_cvx0" geom2="rl_shank_cvx4"/>
+    <pair geom1="rl_thigh_cvx0" geom2="rl_shank_cvx5"/>
+    <pair geom1="rl_thigh_cvx0" geom2="rl_shank_cvx6"/>
+    <pair geom1="rl_thigh_cvx0" geom2="rl_shank_cvx7"/>
+    <pair geom1="rl_thigh_cvx1" geom2="rl_shank_cvx0"/>
+    <pair geom1="rl_thigh_cvx1" geom2="rl_shank_cvx1"/>
+    <pair geom1="rl_thigh_cvx1" geom2="rl_shank_cvx2"/>
+    <pair geom1="rl_thigh_cvx1" geom2="rl_shank_cvx3"/>
+    <pair geom1="rl_thigh_cvx1" geom2="rl_shank_cvx4"/>
+    <pair geom1="rl_thigh_cvx1" geom2="rl_shank_cvx5"/>
+    <pair geom1="rl_thigh_cvx1" geom2="rl_shank_cvx6"/>
+    <pair geom1="rl_thigh_cvx1" geom2="rl_shank_cvx7"/>
+    <pair geom1="rl_thigh_cvx2" geom2="rl_shank_cvx0"/>
+    <pair geom1="rl_thigh_cvx2" geom2="rl_shank_cvx1"/>
+    <pair geom1="rl_thigh_cvx2" geom2="rl_shank_cvx2"/>
+    <pair geom1="rl_thigh_cvx2" geom2="rl_shank_cvx3"/>
+    <pair geom1="rl_thigh_cvx2" geom2="rl_shank_cvx4"/>
+    <pair geom1="rl_thigh_cvx2" geom2="rl_shank_cvx5"/>
+    <pair geom1="rl_thigh_cvx2" geom2="rl_shank_cvx6"/>
+    <pair geom1="rl_thigh_cvx2" geom2="rl_shank_cvx7"/>
+    <pair geom1="rl_thigh_cvx3" geom2="rl_shank_cvx0"/>
+    <pair geom1="rl_thigh_cvx3" geom2="rl_shank_cvx1"/>
+    <pair geom1="rl_thigh_cvx3" geom2="rl_shank_cvx2"/>
+    <pair geom1="rl_thigh_cvx3" geom2="rl_shank_cvx3"/>
+    <pair geom1="rl_thigh_cvx3" geom2="rl_shank_cvx4"/>
+    <pair geom1="rl_thigh_cvx3" geom2="rl_shank_cvx5"/>
+    <pair geom1="rl_thigh_cvx3" geom2="rl_shank_cvx6"/>
+    <pair geom1="rl_thigh_cvx3" geom2="rl_shank_cvx7"/>
+    <pair geom1="rl_thigh_cvx4" geom2="rl_shank_cvx0"/>
+    <pair geom1="rl_thigh_cvx4" geom2="rl_shank_cvx1"/>
+    <pair geom1="rl_thigh_cvx4" geom2="rl_shank_cvx2"/>
+    <pair geom1="rl_thigh_cvx4" geom2="rl_shank_cvx3"/>
+    <pair geom1="rl_thigh_cvx4" geom2="rl_shank_cvx4"/>
+    <pair geom1="rl_thigh_cvx4" geom2="rl_shank_cvx5"/>
+    <pair geom1="rl_thigh_cvx4" geom2="rl_shank_cvx6"/>
+    <pair geom1="rl_thigh_cvx4" geom2="rl_shank_cvx7"/>
+    <pair geom1="rl_thigh_cvx5" geom2="rl_shank_cvx0"/>
+    <pair geom1="rl_thigh_cvx5" geom2="rl_shank_cvx1"/>
+    <pair geom1="rl_thigh_cvx5" geom2="rl_shank_cvx2"/>
+    <pair geom1="rl_thigh_cvx5" geom2="rl_shank_cvx3"/>
+    <pair geom1="rl_thigh_cvx5" geom2="rl_shank_cvx4"/>
+    <pair geom1="rl_thigh_cvx5" geom2="rl_shank_cvx5"/>
+    <pair geom1="rl_thigh_cvx5" geom2="rl_shank_cvx6"/>
+    <pair geom1="rl_thigh_cvx5" geom2="rl_shank_cvx7"/>
+    <pair geom1="rl_thigh_cvx6" geom2="rl_shank_cvx1"/>
+    <pair geom1="rl_thigh_cvx6" geom2="rl_shank_cvx2"/>
+    <pair geom1="rl_thigh_cvx6" geom2="rl_shank_cvx3"/>
+    <pair geom1="rl_thigh_cvx6" geom2="rl_shank_cvx4"/>
+    <pair geom1="rl_thigh_cvx6" geom2="rl_shank_cvx6"/>
+    <pair geom1="rl_thigh_cvx6" geom2="rl_shank_cvx7"/>
+    <pair geom1="rl_thigh_cvx7" geom2="rl_shank_cvx0"/>
+    <pair geom1="rl_thigh_cvx7" geom2="rl_shank_cvx1"/>
+    <pair geom1="rl_thigh_cvx7" geom2="rl_shank_cvx2"/>
+    <pair geom1="rl_thigh_cvx7" geom2="rl_shank_cvx3"/>
+    <pair geom1="rl_thigh_cvx7" geom2="rl_shank_cvx4"/>
+    <pair geom1="rl_thigh_cvx7" geom2="rl_shank_cvx5"/>
+    <pair geom1="rl_thigh_cvx7" geom2="rl_shank_cvx6"/>
+    <pair geom1="rl_thigh_cvx7" geom2="rl_shank_cvx7"/>
+    <pair geom1="rr_thigh_cvx0" geom2="rr_shank_cvx0"/>
+    <pair geom1="rr_thigh_cvx0" geom2="rr_shank_cvx1"/>
+    <pair geom1="rr_thigh_cvx0" geom2="rr_shank_cvx2"/>
+    <pair geom1="rr_thigh_cvx0" geom2="rr_shank_cvx3"/>
+    <pair geom1="rr_thigh_cvx0" geom2="rr_shank_cvx4"/>
+    <pair geom1="rr_thigh_cvx0" geom2="rr_shank_cvx5"/>
+    <pair geom1="rr_thigh_cvx0" geom2="rr_shank_cvx6"/>
+    <pair geom1="rr_thigh_cvx0" geom2="rr_shank_cvx7"/>
+    <pair geom1="rr_thigh_cvx1" geom2="rr_shank_cvx0"/>
+    <pair geom1="rr_thigh_cvx1" geom2="rr_shank_cvx1"/>
+    <pair geom1="rr_thigh_cvx1" geom2="rr_shank_cvx2"/>
+    <pair geom1="rr_thigh_cvx1" geom2="rr_shank_cvx3"/>
+    <pair geom1="rr_thigh_cvx1" geom2="rr_shank_cvx4"/>
+    <pair geom1="rr_thigh_cvx1" geom2="rr_shank_cvx5"/>
+    <pair geom1="rr_thigh_cvx1" geom2="rr_shank_cvx6"/>
+    <pair geom1="rr_thigh_cvx1" geom2="rr_shank_cvx7"/>
+    <pair geom1="rr_thigh_cvx2" geom2="rr_shank_cvx0"/>
+    <pair geom1="rr_thigh_cvx2" geom2="rr_shank_cvx1"/>
+    <pair geom1="rr_thigh_cvx2" geom2="rr_shank_cvx2"/>
+    <pair geom1="rr_thigh_cvx2" geom2="rr_shank_cvx3"/>
+    <pair geom1="rr_thigh_cvx2" geom2="rr_shank_cvx4"/>
+    <pair geom1="rr_thigh_cvx2" geom2="rr_shank_cvx5"/>
+    <pair geom1="rr_thigh_cvx2" geom2="rr_shank_cvx6"/>
+    <pair geom1="rr_thigh_cvx2" geom2="rr_shank_cvx7"/>
+    <pair geom1="rr_thigh_cvx3" geom2="rr_shank_cvx0"/>
+    <pair geom1="rr_thigh_cvx3" geom2="rr_shank_cvx1"/>
+    <pair geom1="rr_thigh_cvx3" geom2="rr_shank_cvx2"/>
+    <pair geom1="rr_thigh_cvx3" geom2="rr_shank_cvx3"/>
+    <pair geom1="rr_thigh_cvx3" geom2="rr_shank_cvx4"/>
+    <pair geom1="rr_thigh_cvx3" geom2="rr_shank_cvx5"/>
+    <pair geom1="rr_thigh_cvx3" geom2="rr_shank_cvx6"/>
+    <pair geom1="rr_thigh_cvx3" geom2="rr_shank_cvx7"/>
+    <pair geom1="rr_thigh_cvx4" geom2="rr_shank_cvx0"/>
+    <pair geom1="rr_thigh_cvx4" geom2="rr_shank_cvx1"/>
+    <pair geom1="rr_thigh_cvx4" geom2="rr_shank_cvx3"/>
+    <pair geom1="rr_thigh_cvx4" geom2="rr_shank_cvx4"/>
+    <pair geom1="rr_thigh_cvx4" geom2="rr_shank_cvx5"/>
+    <pair geom1="rr_thigh_cvx4" geom2="rr_shank_cvx6"/>
+    <pair geom1="rr_thigh_cvx4" geom2="rr_shank_cvx7"/>
+    <pair geom1="rr_thigh_cvx5" geom2="rr_shank_cvx0"/>
+    <pair geom1="rr_thigh_cvx5" geom2="rr_shank_cvx1"/>
+    <pair geom1="rr_thigh_cvx5" geom2="rr_shank_cvx2"/>
+    <pair geom1="rr_thigh_cvx5" geom2="rr_shank_cvx3"/>
+    <pair geom1="rr_thigh_cvx5" geom2="rr_shank_cvx4"/>
+    <pair geom1="rr_thigh_cvx5" geom2="rr_shank_cvx5"/>
+    <pair geom1="rr_thigh_cvx5" geom2="rr_shank_cvx6"/>
+    <pair geom1="rr_thigh_cvx5" geom2="rr_shank_cvx7"/>
+    <pair geom1="rr_thigh_cvx6" geom2="rr_shank_cvx0"/>
+    <pair geom1="rr_thigh_cvx6" geom2="rr_shank_cvx1"/>
+    <pair geom1="rr_thigh_cvx6" geom2="rr_shank_cvx4"/>
+    <pair geom1="rr_thigh_cvx6" geom2="rr_shank_cvx5"/>
+    <pair geom1="rr_thigh_cvx6" geom2="rr_shank_cvx7"/>
+    <pair geom1="rr_thigh_cvx7" geom2="rr_shank_cvx0"/>
+    <pair geom1="rr_thigh_cvx7" geom2="rr_shank_cvx1"/>
+    <pair geom1="rr_thigh_cvx7" geom2="rr_shank_cvx2"/>
+    <pair geom1="rr_thigh_cvx7" geom2="rr_shank_cvx3"/>
+    <pair geom1="rr_thigh_cvx7" geom2="rr_shank_cvx4"/>
+    <pair geom1="rr_thigh_cvx7" geom2="rr_shank_cvx5"/>
+    <pair geom1="rr_thigh_cvx7" geom2="rr_shank_cvx6"/>
+    <pair geom1="rr_thigh_cvx7" geom2="rr_shank_cvx7"/>
+  </contact>
   <equality>
     <connect name="fl_close_loop" body1="fl_shank_link_b" body2="fl_shank" anchor="-0.107640 -0.005000 -0.118510" solref="0.002 1"/>
     <connect name="rl_close_loop" body1="rl_shank_link_b" body2="rl_shank" anchor="-0.107640 -0.004996 -0.118510" solref="0.002 1"/>

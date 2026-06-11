@@ -6,11 +6,12 @@ outputs/
 __pycache__/
 
 # CMake 构建产物（每次构建都会重新生成，不应入库）
-motor_control/Linux/build/MJDATA.TXT
+motor_control/Linux/build/
 
 # MuJoCo 运行/编译产物（由 simulate/编译自动生成，可复现，不入库）
 MJDATA.TXT
 MJMODEL.TXT
+MUJOCO_LOG.TXT
 *.mjb
 /mjmodel.xml
 

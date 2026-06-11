@@ -6,11 +6,22 @@
 > 📌 **本文件 = 向前看的计划**。已完成的能力里程碑见 [`CHANGELOG.md`](CHANGELOG.md)；
 > 每次训练/调参的因果记录见 [`doc/experiments/EXPERIMENTS.md`](doc/experiments/EXPERIMENTS.md)。
 > 三层文档关系见 [`doc/version_tracking.md`](doc/version_tracking.md)。
-> 下方"下一步"开干时，去台账立一个 `EXP-XXXX`（可用 `python3 tools/log_run.py`）。
+> 下方"下一步"开干时，去台账立一个 `EXP-XXXX`（可用 `python3 tools/exp/log_run.py`）。
 
 ---
 
-## 📍 当前状态（更新于 2026-06-03）
+## 📍 当前状态（更新于 2026-06-11）
+
+✅ **全链路环境冒烟通过（2026-06-11 修复改名遗留后）**：
+- 改名 `stackforce_mos → mos_one` 后 env_isaaclab 里残留旧包 editable 安装、新包未装，
+  训练/播放/评估全挂 → 已 `pip uninstall stackforce_mos` + `pip install -e source/mos_one --no-deps`。
+  **以后再改包名/挪目录，必须在 env_isaaclab 重装**（详见 README「闭链 USD 注意事项」）。
+- `third_party/rl_sar` 子模块此前为空目录 → 已 `git submodule update --init` 恢复。
+- 逐项验证可跑：Isaac 任务注册（`list_envs.py`）✓、`zero_agent.py` 50 步 ✓、
+  HIM `him/train.py` 2-iter 训练+存档 ✓、`play_mujoco.py`（新旧 ckpt 格式均可，见下）✓、
+  `standup_torque.py` 出图 ✓、`deploy/common/*.py --selftest`（.venv）✓。
+- 尚不能在本机验证的只剩**真机硬件链路**（`deploy/real/rl_deploy.py`、
+  `motor_control` 网页工具）——需要 4 路 USB-RS485 + GO-M8010-6 实机。
 
 ✅ **四足真机已能站起来**（从趴姿安全启动 → 撑起到站姿，见 [站立标定/方向验证网页工具]）。
 
@@ -23,27 +34,75 @@
 
 ---
 
-## ⏭️ 下一步（可立即执行，按优先级｜更新于 2026-06-09）
+## 🛤️ 真机跑起来·关键路径（主线｜更新于 2026-06-11）
 
-> 本轮（2026-06-08/09）在 env_isaaclab + RTX5090 上已落地并验证：ONNX 导出+数值校验、
-> 域随机化冒烟、旧 checkpoint 格式转换器、速度扫描定论。基于这些发现，下一步最该做：
+> **唯一目标：让四足在现实中真正走起来。** 按依赖顺序排 4 个里程碑,每个有明确
+> 「通过标准」,不达标不进下一步。不在这条主线上的工作(地形课程、eval 打磨、
+> mjlab、HIM 收敛)一律放到「跑起来之后」。
+>
+> **前提认知(代码审计已确认)**:现有所有 checkpoint **结构上不可部署**——
+> obs 含线速度真值(真机没有)、固定单指令(对 `--cmd_vx` 零响应)、零域随机化。
+> 所以第一步不是部署,而是**重训一版可部署策略**;旧 checkpoint 不要再花部署功夫。
 
-1. **[最高] 指令条件化重训（解锁速度-力矩扫描）**：当前策略指令不进 obs（固定单指令），
-   实测对 `--cmd_vx` 完全无响应（见 §力矩专项「速度-力矩扫描」）。把 vx/vy/wz 三维指令
-   加进 observation（45→48 维），重训后才能用 `eval.py --cmd_vx {...}` + `eval_plot.py`
-   刻画力矩-速度包络、定真机可行速度上限。**同时要同步改 `deploy/real/rl_deploy.py`
-   `_build_obs` 与 `policy_export.py` 的 `OBS_DIM`。**
-2. **[高] 力矩惩罚重训对比（根因验证）**：`reward_scales["torque"] = -2e-4` 起步重训
-   （骨架已落地，opt-in），用转换器/新 checkpoint + `eval_plot.py` 对比 `near_limit_frac`
-   / CoT / 功率，确认 `fl/rl/rr_shank` 的 ≥80% 饱和是否缓解；按结果微调权重。
-3. **[高] 域随机化正式训练**：冒烟已通过，放量 `--domain_rand --obs_noise_std 0.02`
-   跑收敛模型，与无 DR 基线对比抗扰/泛化（推搡、摩擦、±质量）。
-4. **[中] MuJoCo FK 对齐（§E 收尾）**：装 mujoco + XML 加 foot site，随机关节角下
-   FK 足端 vs `mj_forward` 的 `xpos` 对比；标定 `L_shank` 与闭链传动映射。
-5. **[中] `play_mujoco.py` 复用导出产物（§C 收尾）**：改为加载 `policy_export.py` 产出的
-   `policy.pt`/`.onnx`，删掉硬编码 `[256,256,128]` 重建，彻底消除「结构一变静默错」。
-6. **[低] 训练侧 actuator 延迟/带宽**（§A 未覆盖项）：作为 EventTerm 或 env 内缓冲实现，
-   配合 `eval.py --action_delay` 评估侧形成闭环。
+### 里程碑 1:硬件先决条件(可与训练并行)
+
+- [ ] **力矩/电流余量**(现状:站立都吃力,不解决一切免谈;详见 §力矩专项)
+  - [ ] 按「先软后硬」排查:驱动器电流上限是否设低 → 电池大负载下是否掉压限流
+    → Kt/减速比换算核对(选型分析已排除减速比,大概率前两个)
+  - ✅ 通过标准:站立维持各关节实测力矩 ≤ 额定 ~60%,侧推能恢复
+- [ ] **IMU 接入**(`rl_deploy.py` 现为 `imu_source="stub"`,ang_vel=0、
+  gravity=[0,0,-1] —— **没有 IMU 策略就是盲的,物理上不可能平衡**,最高优先硬件项)
+  - [ ] 在 `_build_obs` 加真实 IMU 分支(serial/udp)
+  - ✅ 通过标准:吊起手动晃机身,ang_vel 与重力投影的方向/单位/坐标系逐项核对正确
+
+### 里程碑 2:重训一版「可部署」策略(GPU,1–2 周)
+
+一次重训合并以下改动(各自骨架都已落地,从没合在一起训过):
+
+- [ ] **actor 盲化**:obs 去掉 `root_lin_vel_b` 真值;指令 vx/vy/wz 进 obs(指令条件化)
+- [ ] **路线**:先用「盲 actor + 非对称 critic」最小改动版,**不要先上 HIM**
+  (HIM 从未收敛过,新算法调试与真机调试两个变量不要叠加;HIM 留作走稳后的升级)
+- [ ] **域随机化放量**:`--domain_rand --obs_noise_std 0.02`(冒烟已过)
+- [~] **力矩三件套**(对应真机「小腿满载、蹲低硬走」):☑️ 配置已落地(2026-06-12,
+  16-env 冒烟过、reward 中生效):`reward_scales["torque"]=-2e-4` + `effort_limit_sim`
+  12→16;同批落地 `armature=0.01`(反射转子惯量,取自 menagerie go2 同款执行器)与
+  `foot_contact_height_threshold` 0.07→0.15(foot_slip 此前从未生效)。
+  剩余:抬高站姿目标(base 0.256→0.32,先看力矩惩罚重训后是否自然改善)+ **重训验证**。
+- [ ] **obs 合约三处同步对账**:训练 env / `policy_export.py` 的 `OBS_DIM` /
+  `rl_deploy.py` 的 `_build_obs`,逐字段(顺序、单位、scale)对齐
+- ✅ 通过标准:`eval.py` 平地 0 跌倒;对不同 `--cmd_vx` 有明确响应;
+  `near_limit_frac` 显著下降;推搡/摩擦/±质量扰动下存活率不崩
+
+### 里程碑 3:MuJoCo 受限观测闸门(上真机前最后一道门)
+
+- [ ] 把 `play_mujoco.py` 的「假 sim2real」(直接读 `data.qvel` 喂真值)改成
+  **只用真机拿得到的量**(IMU 角速度 + 重力投影 + 关节编码器)跑导出的 `policy.pt`
+- ✅ 通过标准:受限观测下在 MuJoCo 走稳。**这步过不了真机一定过不了;
+  过了,真机问题就收敛到硬件标定**
+
+### 里程碑 4:渐进上机(每步可回退,严格按序)
+
+1. [ ] **`sim_sign` 逐关节实机验证**(yaml 全是默认值 1,从未验证——AI 写的配置里
+   最典型的「看着对、没验过」;用 robot_web 单腿/方向验证工具)
+2. [ ] 吊线 + `--no_rl`:站姿下 `q_sim ≈ 0`、IMU 读数正确
+3. [ ] 吊线 + RL 低增益:空中做出行走动作、不抽搐
+4. [ ] 落地有人扶 + 零速指令站立 → 小速度(0.3 m/s)直线 → 逐步放开
+
+### ⚠️ 给「大量 AI 实现代码」的验证原则
+
+接口合约必须**逐项物理验证**,不能用信任代替:关节顺序、方向符号、单位(rad/rot)、
+action_scale、obs 排布——sim2real 死掉的案例 90% 死在这些约定上,不在算法上。
+仓库已备好验证工具:`--no_rl`、robot_web 单腿/方向验证、各模块 `--selftest`。
+
+### 📦 非主线(跑起来之后再做)
+
+- [ ] MuJoCo FK 对齐(§E 收尾):装 mujoco + XML 加 foot site,FK vs `mj_forward`
+  对比;标定 `L_shank` 与闭链传动映射
+- [ ] `play_mujoco.py` 直接加载 `policy_export.py` 产出的 `policy.pt`/`.onnx`,
+  做导出产物 sim-to-sim 回归(新旧 ckpt 格式兼容、结构自动推导已于 2026-06-11 完成)
+- [ ] 训练侧 actuator 延迟/带宽(EventTerm 或 env 内缓冲),配合 `eval.py
+  --action_delay` 形成闭环
+- [ ] 地形课程启用、HIM 收敛模型、mjlab 第二后端
 
 ---
 
@@ -96,7 +155,7 @@
   - → 要刻画「力矩随速度恶化」定真机速度上限，必须先把**指令喂进 obs 重训指令条件化策略**
     （或每个速度各训一个）。在那之前这条扫描无意义。
   - 🔧 配套交付：旧 checkpoint 是 `actor/critic_state_dict` 格式（老 rsl_rl 训练），env_isaaclab
-    新 rsl_rl 的 `runner.load` 只认 `model_state_dict` → `tools/convert_checkpoint_to_rsl_rl.py`
+    新 rsl_rl 的 `runner.load` 只认 `model_state_dict` → `tools/ckpt/convert_checkpoint_to_rsl_rl.py`
     做纯键名重映射转换（已验证转换后 eval 指标与原始逐位一致），解锁旧模型在当前环境 eval/play。
 
 ---

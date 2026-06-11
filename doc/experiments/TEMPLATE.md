@@ -3,7 +3,7 @@
   1) 复制下面 "## EXP-XXXX" 整段到 EXPERIMENTS.md 的 <!-- ENTRIES:START --> 之后（最新在上）；
   2) 在索引表 <!-- INDEX:ROWS --> 之后加一行；
   3) 把 XXXX 换成下一个递增编号（看现有最大值 +1）。
-推荐改用脚本自动完成：python tools/log_run.py --help
+推荐改用脚本自动完成：python tools/exp/log_run.py --help
 字段填写原则：指标只放"工具抓不到的关键数字 + 指回 SwanLab 的链接"，不要把曲线复制进来。
 -->
 

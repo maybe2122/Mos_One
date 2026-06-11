@@ -16,7 +16,14 @@
 ### 新增
 - 站起来过程关节/电机力矩分析与可视化 `deploy/mujoco/standup_torque.py`（`43980e4`）
 - mjlab 集成说明文档 `doc/mjlab_integration.md`（`b21560e`）
-- **版本记录系统**：CHANGELOG + 实验台账 + 自动追加脚本 `tools/log_run.py`
+- **版本记录系统**：CHANGELOG + 实验台账 + 自动追加脚本 `tools/exp/log_run.py`
+
+### 变更（2026-06-12，仿真侧 sim2real 修复，16-env 冒烟通过，待重训验证）
+- 训练 env 力矩惩罚默认开启：`reward_scales["torque"]` 0.0 → **-2e-4**（贴上限硬走 / 蹦跳步态的根因）
+- `effort_limit_sim` 12 → **16 N·m**（12 卡深蹲/蹬地需求线零余量，见 `doc/dynamics_gear_ratio_analysis.md` 行动项）
+- 执行器新增 **`armature=0.01`**（转子惯量×6.33² 反射；取自 menagerie unitree_go2 同款 GO-M8010-6 执行器，待真机辨识校准）
+- `foot_contact_height_threshold` 0.07 → **0.15**（此前 `foot_slip` 奖励从未生效）
+- `train.py --num_envs` 默认 16000 → **16384**（RTX 5090 32GB 实测 16384 可跑，~85k steps/s）
 
 ### 修复
 - 重新登记 `rl_sar` 子模块（恢复 `.gitmodules` 与 gitlink）（`0c94d36`）

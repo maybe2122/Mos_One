@@ -1,3 +1,6 @@
 [submodule "third_party/rl_sar"]
 	path = third_party/rl_sar
 	url = https://github.com/fan-ziqi/rl_sar.git
+[submodule "third_party/mjlab"]
+	path = third_party/mjlab
+	url = https://github.com/mujocolab/mjlab.git

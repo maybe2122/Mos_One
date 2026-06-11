@@ -129,13 +129,15 @@ MUJOCO_GL=glx ../env_isaaclab/bin/python deploy/mujoco/standup_torque.py \
 
 ## 🎮 `play_mujoco.py` — 把训练好的策略放到 MuJoCo 上跑
 
-加载 rsl_rl 的 `.pt` checkpoint，取出 `actor_state_dict` 重建 `[256, 256, 128]`-ELU 的
-actor MLP，**完整复刻 Isaac Lab 的 45 维观测与动作管线**（root 线/角速度、投影重力、
+加载 rsl_rl 的 `.pt` checkpoint（**新旧两种格式都认**：老训练的
+`actor_state_dict`/`mlp.*` 与 env_isaaclab 新 rsl_rl 的 `model_state_dict`/`actor.*`），
+actor MLP 的层结构**直接从权重形状推导**（不再硬编码 `[256,256,128]`，结构不匹配会在
+加载时报错而非静默错），**完整复刻 Isaac Lab 的 45 维观测与动作管线**（root 线/角速度、投影重力、
 joint_pos_rel、joint_vel、prev_actions；clip 1.5 → `scale * action + default_pos` → position
 伺服 kp=25/kv=0.5），50 Hz 控制跑在 1000 Hz 物理上，用来在 MuJoCo 里验证 sim-to-sim 一致性。
 
 > [!IMPORTANT]
-> MJCF 需先由 `tools/usd_to_mjcf.py` 生成。闭链腿在 Isaac 是刚性 PhysX 关节，MuJoCo 用
+> MJCF 需先由 `tools/asset/usd_to_mjcf.py` 生成。闭链腿在 Isaac 是刚性 PhysX 关节，MuJoCo 用
 > 软 `<connect>` 等式近似，故用 1000 Hz 小步长让闭链够刚、下肢能承重而不软塌。
 
 ### 运行
@@ -156,7 +158,7 @@ MUJOCO_GL=glx ../env_isaaclab/bin/python deploy/mujoco/play_mujoco.py
 
 | 参数 | 默认 | 说明 |
 |:---|:---:|:---|
-| `--checkpoint` | 最新 `model_*.pt` | rsl_rl 的 `.pt`（须含 `actor_state_dict`），不给则自动挑 `logs/rsl_rl` 下最新 |
+| `--checkpoint` | 最新 `model_*.pt` | rsl_rl 的 `.pt`（含 `actor_state_dict` 或 `model_state_dict` 均可），不给则自动挑 `logs/rsl_rl` 下最新 |
 | `--headless` | off | 不开 viewer，静默跑 N 步做验证（SSH 下用） |
 | `--duration` | `0` | 跑多少秒；0 = viewer 模式不限时；headless 必须 > 0 |
 | `--mjcf` | `assets/mos2026_2.xml` | MJCF 路径 |

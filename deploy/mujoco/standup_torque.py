@@ -64,14 +64,16 @@ HIP_POS = np.array([0.15, 0.15, -0.15, -0.15])
 THIGH_AXIS_SIGN = np.array([-1.0, +1.0, -1.0, +1.0])   # fl,fr,rl,rr: -y,+y,-y,+y
 SHANK_AXIS_SIGN = np.array([-1.0, +1.0, -1.0, +1.0])
 
-# 站/蹲姿用「物理俯仰」(rad) 描述，再按轴符号镜像成 12 关节目标。默认值经扫描：
-# kp=25 伺服下，站姿(thigh 0 / shank +0.4) 能稳住 ~0.26 m，蹲姿(thigh +0.6 /
-# shank −0.6) 趴到 ~0.06 m —— 一次清晰可见的站起来。注意闭链 shank 无法完全伸直，
-# 本模型 position 控制下站高上限约 0.26 m（见 doc/站立起不来：伺服 kp=25 偏软）。
+# 站/蹲姿用「物理俯仰」(rad) 描述，再按轴符号镜像成 12 关节目标。
+# 蹲姿受大腿-小腿机械限位约束：MJCF 已加 thigh↔shank 凸分解碰撞对
+# （tools/asset/add_knee_self_collision.py），实测限位在 thigh≈0.34 /
+# shank≈-0.39，蹲更深大腿就会顶在小腿上（真机同样顶死）。默认蹲姿取限位内
+# 留余量的 0.30/-0.35；注意 reset 是直接置入蹲姿 qpos，若给超限值会从
+# 已穿透状态开始、接触把杆件越推越深（穿模）。
 STAND_THIGH_PHYS = 0.0
 STAND_SHANK_PHYS = 0.4
-CROUCH_THIGH_PHYS = 0.6
-CROUCH_SHANK_PHYS = -0.6
+CROUCH_THIGH_PHYS = 0.30
+CROUCH_SHANK_PHYS = -0.35
 
 # --- 电机/传动常数（取自 deploy/common/dynamics.py，GO-M8010-6 @24V）-----------
 GEAR = 6.33                 # 减速比

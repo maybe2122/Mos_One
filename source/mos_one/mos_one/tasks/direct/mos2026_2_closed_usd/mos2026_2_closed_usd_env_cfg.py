@@ -333,16 +333,21 @@ class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
                 ],
                 stiffness=25.0,
                 damping=0.5,
+                # 反射转子惯量（armature）：电机转子惯量经减速比平方放大后叠加在
+                # 关节上（J_rotor × 6.33² ≈ 40×）。不设这项仿真的腿比真腿"轻"，
+                # 策略学得过于敏捷（快速收摆腿零代价、偏好蹦跳步态），上真机跟不上。
+                # 0.01 kg·m² 取自 DeepMind mujoco_menagerie 官方 unitree_go2 模型
+                # （同款 GO-M8010-6 执行器，ctrlrange ±23.7 可证），大量 Go2
+                # sim2real 工作验证过；更准的值待真机系统辨识后替换。
+                armature=0.01,
                 # GO-M8010-6 电机：最大扭矩 23.7 N·m，最大转速 30 rad/s（24V 供电）。
-                # 训练阶段限制（分两段，便于课程式逐步放开）：
-                #   初期（站立 / walking / trot / 基础 locomotion）——当前值
-                #       effort  ≈ 10–12 N·m，velocity ≈ 10–15 rad/s
-                #       策略更稳，不抽搐，sim-to-real 友好。
-                #   后期（dynamic gait / 小跳跃 / recovery，待策略稳定后再放开）
-                #       effort  ≈ 14–16 N·m，velocity ≈ 18–22 rad/s
+                # 2026-06-12 起 effort 从 12 上调到 16（doc/dynamics_gear_ratio_analysis.md
+                # 行动项）：12 N·m 恰好卡在深蹲/动态蹬地的需求线上零余量，策略被迫
+                # 「贴上限硬走」；16 N·m（≤峰值 23.7）配合 reward_scales["torque"]
+                # 惩罚，让策略有余量但用力矩要付费。
                 # 真实电机峰值（23.7 N·m / 30 rad/s）不建议在仿真里直接贴满，
                 # 不然策略会学到一直贴峰值的动作，真机上跑不出来。
-                effort_limit_sim=12.0,
+                effort_limit_sim=16.0,
                 velocity_limit_sim=15.0,
             ),
         },
@@ -370,8 +375,11 @@ class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
     ]
     # 脚 body 相对地形原点的高度低于此阈值时，视为"接触地面"，
     # 才会参与 foot_slip 惩罚的统计。
-    # 站立状态下本机器人小腿 body 中心大约离地 3-5 cm，所以 0.07 m 留一点余量。
-    foot_contact_height_threshold = 0.07
+    # 2026-06-12 从 0.07 抬到 0.15：eval 实测 duty_factor/步态指标全部退化、
+    # foot_slip 训练时大概率从未生效——shank body 中心实际高度高于 0.07
+    # （见 todo §评估发现）。0.15 覆盖支撑相的真实 body 高度；如步态指标
+    # 出现"摆动相也被算成接触"，可用 eval.py --foot_contact_height 扫描微调。
+    foot_contact_height_threshold = 0.15
     # 对角线 trot 步态对称奖励用到的两条对角线分组。
     # 旧的"左侧 vs 右侧"分组（fl+rl vs fr+rr）有个致命问题：bound 和 pronk
     # 这两种"跳着走"的步态左右两边能量是相等的，奖励给 0 惩罚 → policy 学到
@@ -487,11 +495,12 @@ class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
         # 用 -1.0 比 gait_symmetry 还重，因为这是用户明确点名要"增大"的项：
         # 它直接看脚的运动相位，比关节空间对称项更难被"用别的关节代偿"绕过。
         "anti_bound": -1.0,
-        # 力矩惩罚 sum(τ²)（custom_rewards.py 计算）。默认 0.0 = 关闭，不改变现有训练。
-        # 评估显示策略「贴力矩上限硬走」（shank 83~84% 时间 ≥90% 上限）是真机力矩/
-        # 电流不足在仿真侧的同源表现。开启时建议起步 -2e-4，逐步上调并用 eval_plot.py
-        # 对比 near_limit_frac / CoT；过大会让策略不敢发力、走不动。
-        "torque": 0.0,
+        # 力矩惩罚 sum(τ²)（custom_rewards.py 计算）。2026-06-12 起默认 -2e-4 开启
+        # （此前 0.0 关闭）：评估显示策略「贴力矩上限硬走」（shank 83~84% 时间 ≥90%
+        # 上限）、CoT 4.5——是真机力矩/电流不足在仿真侧的同源表现；蹦跳步态的高峰值
+        # 力矩在没有这项时也是"免费"的。重训后用 eval_plot.py 对比 near_limit_frac /
+        # CoT 微调；过大会让策略不敢发力、走不动。
+        "torque": -2.0e-4,
         "custom_reward": 0.0,
     }
     # 速度跟踪奖励里 exp() 的带宽。带宽越大，部分达成（比如指令 1.0 m/s
