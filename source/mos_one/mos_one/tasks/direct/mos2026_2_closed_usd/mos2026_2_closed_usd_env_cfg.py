@@ -200,11 +200,16 @@ class Mos20262ClosedUsdEnvCfg(DirectRLEnvCfg):
     # 策略动作向量维度。必须等于 len(actuated_joint_names)
     # — 每个驱动关节一个标量（4 髀 + 4 大腿 + 4 小腿 = 12）。
     action_space = 12
-    # 策略观测向量维度。在 env._get_observations 中构建：
+    # 策略观测向量维度。在 env._get_observations 中按此顺序拼接：
     #   root_lin_vel_b (3) + root_ang_vel_b (3) + projected_gravity_b (3)
-    # + commanded_lin_vel_xy (2) + commanded_ang_vel_z (1)
-    # + joint_pos - default_joint_pos (12) + joint_vel (12) + last_actions (12)
-    # = 45。每当 env.py 中的 obs 拼接发生变化时需更新此值。
+    # + (joint_pos - default_joint_pos) (12) + joint_vel (12) + last_actions (12)
+    # = 45。
+    # 注意：obs **不含**速度指令（commanded_lin_vel_xy / commanded_ang_vel_z）。
+    # 当前指令是写死的常量（见下方 commanded_* 字段），只在 reward 里用来算
+    # 跟踪误差；因此该策略只能跟踪这个固定前进指令，无法在线变速/转向。
+    # 若要做 command-conditioned 策略：把 3 维 command 拼进 obs（→48）、reward
+    # 改用动态 command、并在 _reset_idx 里随机采样指令，同时同步更新此值。
+    # 每当 env.py 的 obs 拼接发生变化时都要更新此值。
     observation_space = 45
     # 特权“仅评论家”观测维度。0 表示禁用非对称评论家；
     # 设为 >0 并在 _get_observations 中输出 "critic" 键即可启用。

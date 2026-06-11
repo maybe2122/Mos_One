@@ -151,6 +151,68 @@ def leg_ik(foot, leg: LegGeom, *, frame: str = "hip", knee_sign: float = -1.0):
     return q_ab, q_hip, q_knee
 
 
+def leg_jacobian(q_ab, q_hip, q_knee, leg: LegGeom) -> np.ndarray:
+    """单腿解析 Jacobian J = ∂foot/∂q，foot=(x,y,z)，q=(q_ab,q_hip,q_knee)。
+
+    满足  foot_dot = J · q_dot，反之 q_dot = solve(J, foot_dot)。这是「足端速度 ↔
+    关节角速度」的核心映射——给定机身/足端速度需求即可解出每个电机要转多快。
+
+    由 `leg_fk` 直接微分得到（含外摆耦合）。frame 不影响 Jacobian：base 系只比 hip
+    系多一个常量挂载点偏移，对 q 求导为 0。
+
+    参数可为标量或等长数组（向量化）。返回 shape (..., 3, 3)，行=foot(x,y,z)、
+    列=q(ab,hip,knee)。在奇异位形（腿完全伸直 q_knee=0）附近 J 接近奇异，求逆请用
+    `np.linalg.solve` / `pinv` 并留意。
+    """
+    qa = _as_array(q_ab)
+    qh = _as_array(q_hip)
+    qk = _as_array(q_knee)
+    l1, l2, d = leg.l1, leg.l2, leg.d
+
+    ca, sa = np.cos(qa), np.sin(qa)
+    # 矢状面量（与 leg_fk 一致）：x 前、z_sag 为外摆前的竖直分量
+    z_sag = -(l1 * np.cos(qh) + l2 * np.cos(qh + qk))
+    dx_dqh = l1 * np.cos(qh) + l2 * np.cos(qh + qk)
+    dx_dqk = l2 * np.cos(qh + qk)
+    # dz_sag/dqh == x；dz_sag/dqk == L2 sin(qh+qk)
+    dzs_dqh = l1 * np.sin(qh) + l2 * np.sin(qh + qk)
+    dzs_dqk = l2 * np.sin(qh + qk)
+
+    zeros = np.zeros_like(dx_dqh)
+    # 行 x：外摆不改变 x
+    jx = np.stack([zeros, dx_dqh, dx_dqk], axis=-1)
+    # 行 y_h = d cos(qa) − z_sag sin(qa)
+    jy = np.stack([-d * sa - z_sag * ca, -sa * dzs_dqh, -sa * dzs_dqk], axis=-1)
+    # 行 z_h = d sin(qa) + z_sag cos(qa)
+    jz = np.stack([d * ca - z_sag * sa, ca * dzs_dqh, ca * dzs_dqk], axis=-1)
+    return np.stack([jx, jy, jz], axis=-2)
+
+
+def quad_jacobian(q: np.ndarray) -> np.ndarray:
+    """整机 Jacobian。q: (..., 4, 3) 顺序 [ab,hip,knee]×[fl,fr,rl,rr]。
+    返回 (..., 4, 3, 3)，每腿一个 3×3 J。"""
+    q = _as_array(q)
+    out = []
+    for i, name in enumerate(LEG_NAMES):
+        out.append(leg_jacobian(q[..., i, 0], q[..., i, 1], q[..., i, 2], LEGS[name]))
+    return np.stack(out, axis=-3)
+
+
+def leg_foot_vel_to_qdot(foot_vel, q_ab, q_hip, q_knee, leg: LegGeom) -> np.ndarray:
+    """足端速度 → 关节角速度：q_dot = J(q)⁻¹ · foot_vel。
+
+    foot_vel: (..., 3)（髋系/base 系同值，速度与平移无关）。返回 (..., 3) 的
+    (q_ab_dot, q_hip_dot, q_knee_dot)。奇异位形用最小二乘（pinv）兜底，不抛异常。
+    """
+    J = leg_jacobian(q_ab, q_hip, q_knee, leg)          # (..., 3, 3)
+    fv = _as_array(foot_vel)[..., None]                 # (..., 3, 1)
+    try:
+        qd = np.linalg.solve(J, fv)
+    except np.linalg.LinAlgError:
+        qd = np.linalg.pinv(J) @ fv
+    return qd[..., 0]
+
+
 def quad_fk(q: np.ndarray, *, frame: str = "base") -> np.ndarray:
     """整机 FK。q: shape (..., 4, 3)，顺序 [ab, hip, knee] × [fl,fr,rl,rr]。
     返回 (..., 4, 3) 足端坐标。"""
@@ -218,6 +280,32 @@ def _selftest() -> int:
     err = float(np.max(np.linalg.norm(feet - feet2, axis=-1)))
     print(f"  整机足端往返 max_err={err:.2e}")
     ok &= err < 1e-9
+
+    # 3b) Jacobian 对比有限差分：解析 J 应与 FK 的中心差分一致
+    print("\n== 3b. 解析 Jacobian vs 有限差分（每腿 1000 个随机位形）==")
+    eps = 1e-6
+    max_j_err = 0.0
+    for name, leg in LEGS.items():
+        qa = rng.uniform(-0.5, 0.5, 1000)
+        qh = rng.uniform(-0.4, 0.9, 1000)
+        qk = rng.uniform(-1.6, -0.4, 1000)
+        J = leg_jacobian(qa, qh, qk, leg)                 # (1000, 3, 3)
+        # 对每个关节做中心差分，拼出数值 Jacobian
+        cols = []
+        for j, (da, dh, dk) in enumerate([(eps, 0, 0), (0, eps, 0), (0, 0, eps)]):
+            fp = leg_fk(qa + da, qh + dh, qk + dk, leg, frame="hip")
+            fm = leg_fk(qa - da, qh - dh, qk - dk, leg, frame="hip")
+            cols.append((fp - fm) / (2 * eps))            # ∂foot/∂q_j, (1000, 3)
+        J_num = np.stack(cols, axis=-1)                   # (1000, 3, 3)
+        jerr = float(np.max(np.abs(J - J_num)))
+        # 往返：foot_vel = J·qd 任取 qd，再 solve 回来应复现
+        qd = rng.uniform(-2.0, 2.0, (1000, 3))
+        fv = np.einsum("nij,nj->ni", J, qd)
+        qd2 = np.stack([leg_foot_vel_to_qdot(fv[k], qa[k], qh[k], qk[k], leg) for k in range(0, 1000, 200)])
+        rt = float(np.max(np.abs(qd2 - qd[0:1000:200])))
+        print(f"  {name}: |J−J_num|_max={jerr:.2e}  foot_vel→qd→ 往返 max_err={rt:.2e}")
+        max_j_err = max(max_j_err, jerr, rt)
+    ok &= max_j_err < 1e-6
 
     # 4) 可达性 clamp：给一个远超臂展的目标，不应崩、解有界
     print("\n== 4. 不可达目标的 clamp 行为 ==")

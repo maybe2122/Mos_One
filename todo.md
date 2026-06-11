@@ -3,6 +3,11 @@
 > 总体路线：**建模 → 仿真 → 控制 → RL 平地 → 地形泛化 → 动态/Hybrid Internal Model → Sim2Real → 真机**
 >
 
+> 📌 **本文件 = 向前看的计划**。已完成的能力里程碑见 [`CHANGELOG.md`](CHANGELOG.md)；
+> 每次训练/调参的因果记录见 [`doc/experiments/EXPERIMENTS.md`](doc/experiments/EXPERIMENTS.md)。
+> 三层文档关系见 [`doc/version_tracking.md`](doc/version_tracking.md)。
+> 下方"下一步"开干时，去台账立一个 `EXP-XXXX`（可用 `python3 tools/log_run.py`）。
+
 ---
 
 ## 📍 当前状态（更新于 2026-06-03）

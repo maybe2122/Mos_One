@@ -69,6 +69,57 @@ hip 外摆轴 FL/FR=−x、RL/RR=+x；俯仰轴 左腿=−y、右腿=+y。
 
 ---
 
+## 2.5 机身速度 ↔ 电机角速度映射（speed_map）
+
+`deploy/common/speed_map.py` ｜ 可视化 `scripts/tools/speed_viz_isaac.py`
+
+回答「四足要走 v m/s，每个电机得转多快？」。**核心：不是唯一对应**——同一机身速度，
+大步幅低步频（电机慢）或小步幅高步频（电机快）都能实现，步幅/占空比/步频是旋钮。
+
+物理链条（均在 `--selftest` 自洽验证）：
+1. 无打滑约束：`v_body = step_length / (duty · period)`，给定 v 反解步频。
+2. 足端速度剖面：对步态轨迹解析求导（支撑相 vx=−v；摆动相摆线/(1−cos) 导数）。
+3. 足端速度 → 关节角速度：解析 **Jacobian** `q̇ = J(q)⁻¹·foot_vel`（`kinematics.leg_jacobian`）。
+4. 关节 → 电机：`ω_motor = N · q̇`，**N = 6.33**。
+
+两条速度上限：训练软限 `velocity_limit_sim = 15 rad/s`、电机物理空载 `30 rad/s`（关节侧）。
+
+```bash
+# 单点：3 m/s 需要多少电机转速 + 可行性 + 需要多大步幅才进限位
+.venv/bin/python deploy/common/speed_map.py --speed 3.0
+# 扫描出「机身速度→电机转速」曲线 + (速度×步幅)→峰值 设计图 + CSV
+.venv/bin/python deploy/common/speed_map.py --sweep      # → outputs/speed_map/
+.venv/bin/python deploy/common/speed_map.py --selftest
+```
+
+**关键结论**（步幅 10cm / β=0.5 默认 trot）：
+- **1.0 m/s** 峰值关节角速度 14.8 rad/s ≈ 897 rpm，恰好贴训练软限 15 —— 与策略在
+  `commanded_lin_vel_xy=(1.0,0)` 下训练、`velocity_limit_sim=15` 完全吻合。
+- 最大可行机身速度：≤ 训练软限 **1.04 m/s**、≤ 电机物理 **2.02 m/s**。
+- **3.0 m/s** 需求峰值 44.5 rad/s ≈ 2691 rpm，远超上限；即便优化步幅到 ~23cm（再大就
+  超足端可达域、腿伸直奇异反而更糟），最低也要 ~30 rad/s —— **3 m/s 基本到了此机
+  trot 的电机物理天花板**，要更快得加大占空比/换步态或提高电机转速余量。
+
+> ⚠️ 膝为平行四连杆闭链：输出的是「等效膝关节」角速度，shank 电机轴 ≈ ×连杆传动比
+> （≈1，未标定，见 §1 与 todo §E）。hip/thigh 直驱、映射干净。
+
+### IsaacSim 实时可视化（运动学播放 + HUD）
+
+`scripts/tools/speed_viz_isaac.py`：在 IsaacSim 里让机器人按**可配置机身速度**前进、腿按
+trot 循环（运动学播放：关重力 + 步进物理解闭环），omni.ui 实时 HUD 显示机身速度 +
+12 电机角速度条（rad/s/rpm）+ **峰值保持** + 15/30 限位，并复用速度箭头 marker。
+关节角速度由 `speed_map` 解析给出（权威值），sim 机器人是可视化载体。
+
+```bash
+# 用 IsaacLab 环境（注意是 env_isaaclab，不是纯 numpy 的 .venv）
+~/code/RL/env_isaaclab/bin/python scripts/tools/speed_viz_isaac.py --speed 1.0
+~/code/RL/env_isaaclab/bin/python scripts/tools/speed_viz_isaac.py --ramp --v-max 3.0  # 周期扫速度
+# 无显示器/CI 验证（HUD 退化为控制台表）：加 --headless --num-steps 60
+```
+单环境 + 平地，PhysX buffer 已按 8GB 笔记本收紧；实测 RTX 4060 Laptop 峰值显存 ~2.6 GB。
+
+---
+
 ## 3. 动力学 + 减速比选型
 
 `deploy/common/dynamics.py` ｜ 详见 [dynamics_gear_ratio_analysis.md](./dynamics_gear_ratio_analysis.md)
