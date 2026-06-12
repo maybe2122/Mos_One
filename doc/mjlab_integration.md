@@ -198,10 +198,15 @@ mos_one/
 ## 9. 验证清单（里程碑）
 
 - [x] mjlab 官方 demo 能训练（2026-06-11：Go1 velocity 3-iter 冒烟通过，RTX 5090）
-- [ ] 自己的 MJCF 在 MuJoCo viewer 里能站立、闭链不发散（可复用 `deploy/mujoco/assets/mos2026_2.xml`，由 `tools/asset/usd_to_mjcf.py` 产出）
+- [x] 自己的机器人接进 mjlab（2026-06-12：`mjlab_tasks/mos_one_mjlab/`，复用
+  `deploy/mujoco/assets/mos2026_2.xml`，spec_fn 程序化适配——删 floor/light/旧执行器、
+  加 IMU 传感器组 + 足端 site；任务 `Mjlab-Velocity-Flat-MosOne`）
+- [x] 平地速度跟踪任务冒烟跑通（2026-06-12：16 env × 2 iter，全 reward 项/终止/课程正常；
+  收敛训练待跑）
 - [ ] 关节 axis / actuator 极性与实测一致（measure_joint_signs）
-- [ ] 平地速度跟踪任务跑通、reward 上升
-- [ ] sim2sim：Isaac 训出的 policy 在 mjlab 回放行为合理
+- [ ] 正式训练收敛 + 步态质量评估
+- [ ] sim2sim：Isaac 训出的 policy 在 mjlab 回放行为合理（注意两边 obs 布局不同，
+  需要专门的回放适配层）
 - [ ] 导出 policy → `third_party/rl_sar` 部署
 
 ---
