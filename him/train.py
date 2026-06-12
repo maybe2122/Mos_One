@@ -43,6 +43,9 @@ parser.add_argument("--domain_rand", action="store_true",
                     help="启用域随机化事件（摩擦/质量/增益/关节零位偏置/周期推搡）。默认关闭。")
 parser.add_argument("--no_actor_noise", action="store_true",
                     help="关闭 HIM 的 actor 观测噪声（him_actor_noise，默认开启）。")
+parser.add_argument("--payload", type=float, default=5.0,
+                    help="训练时给基座额外附加的固定负载质量（kg），模拟背负载荷。"
+                         "默认 %(default)s；设为 0 关闭。开 --domain_rand 时并入质量随机化区间。")
 # --- SwanLab 实验跟踪（镜像 HIM runner 的 TensorBoard 标量）---
 parser.add_argument("--no_swanlab", action="store_true",
                     help="关闭 SwanLab 实验跟踪（默认开启；未安装 swanlab 时自动跳过）。")
@@ -61,6 +64,11 @@ simulation_app = app_launcher.app
 # ---- imports that require the running app (carb/isaaclab) ----
 import torch  # noqa: E402
 
+import isaaclab.envs.mdp as mdp  # noqa: E402
+from isaaclab.managers import EventTermCfg as EventTerm  # noqa: E402
+from isaaclab.managers import SceneEntityCfg  # noqa: E402
+from isaaclab.utils import configclass  # noqa: E402
+
 from mos_one.tasks.direct.mos2026_2_closed_usd.mos2026_2_closed_usd_env_cfg import (  # noqa: E402
     CURRICULUM_TERRAIN_CFG,
     ROUGH_TERRAIN_CFG,
@@ -74,6 +82,36 @@ from him_rl.runners.him_on_policy_runner import HIMOnPolicyRunner  # noqa: E402
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
+
+
+@configclass
+class PayloadOnlyEventCfg:
+    """仅含基座负载项的事件容器（未开 --domain_rand 时挂载用）。
+
+    DirectRLEnv 在 cfg.events 非空时自动建 EventManager；负载项由
+    `_make_payload_term` 在 main() 里按 --payload 动态填入。
+    """
+
+    pass
+
+
+def _make_payload_term(payload_kg: float) -> EventTerm:
+    """固定负载：startup 时给 base 刚体一次性 +payload_kg（上下限相等=确定值）。
+
+    走 mdp.randomize_rigid_body_mass（operation="add"），惯量按质量比例自动重算。
+    注意该函数每次调用都先把质量重置回 default 再施加，同一刚体上多个质量事件
+    **不叠加**（后者覆盖前者）——所以 --domain_rand 开启时不要用本项，而是把
+    负载平移进 EventCfg.add_base_mass 的随机区间（见 main()）。
+    """
+    return EventTerm(
+        func=mdp.randomize_rigid_body_mass,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names="base"),
+            "mass_distribution_params": (payload_kg, payload_kg),
+            "operation": "add",
+        },
+    )
 
 
 def _init_swanlab(args, env_cfg, train_cfg, log_dir):
@@ -101,6 +139,7 @@ def _init_swanlab(args, env_cfg, train_cfg, log_dir):
             "seed": args.seed,
             "terrain": args.terrain,
             "domain_rand": bool(args.domain_rand),
+            "payload": args.payload,
             "him_actor_noise": not args.no_actor_noise,
             # HIM 观测/网络
             "num_actor_obs": 270,
@@ -175,6 +214,27 @@ def main():
               "首次启用请先小 env 冒烟。")
     else:
         env_cfg.events = None
+
+    # 基座固定负载（kg）。randomize_rigid_body_mass 每次调用都基于 default 质量
+    # 重算，同一刚体上多个质量事件互相覆盖，所以分两种挂法：
+    #   - domain_rand 开：把负载平移进已有 add_base_mass 的随机区间（单事件完成
+    #     "payload + 随机 ±kg"）；
+    #   - domain_rand 关：挂仅含固定负载项的事件容器（EventManager 解析
+    #     events.__dict__，运行时 setattr 即可生效）。
+    if args.payload > 0.0:
+        if env_cfg.events is not None:
+            lo, hi = env_cfg.events.add_base_mass.params["mass_distribution_params"]
+            env_cfg.events.add_base_mass.params["mass_distribution_params"] = (
+                lo + args.payload, hi + args.payload)
+            print(f"[HIM-Mos] 基座负载已并入质量随机化：base +({lo + args.payload:.2f}, "
+                  f"{hi + args.payload:.2f}) kg。")
+        else:
+            env_cfg.events = PayloadOnlyEventCfg()
+            env_cfg.events.add_payload = _make_payload_term(args.payload)
+            print(f"[HIM-Mos] 基座负载已启用：base +{args.payload:.2f} kg（startup 一次性附加）。")
+    elif args.payload < 0.0:
+        raise ValueError(f"--payload 不能为负数，收到 {args.payload}")
+
     # HIM actor 观测噪声（默认开）：--no_actor_noise 关闭，训干净 obs 基线用。
     env_cfg.him_actor_noise = not args.no_actor_noise
     if args.no_actor_noise:
